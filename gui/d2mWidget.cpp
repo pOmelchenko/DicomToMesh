@@ -102,8 +102,25 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
     m_mode->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_mode->setMinimumContentsLength(12);
     m_mode->addItems({"Threshold · CT / manual", "Head outline · MRI, approximate",
-                      "Region from seeds · MRI / manual", "Brain · SynthStrip (local CPU)"});
+                      "Region from seeds · MRI / manual", "Brain · SynthStrip (local CPU)",
+                      "Skull · MRI estimate (experimental)"});
     segmentation->addRow("Method", m_mode);
+    m_skullControls = new QWidget;
+    auto *skullLayout = new QVBoxLayout(m_skullControls);
+    skullLayout->setContentsMargins(0, 0, 0, 0);
+    auto *skullHelp = new QLabel("Load a T1-weighted MR series above. Choose a T2-weighted series "
+                                 "from the same study to support the estimate (recommended).");
+    skullHelp->setWordWrap(true);
+    skullLayout->addWidget(skullHelp);
+    m_secondary = new QComboBox;
+    m_secondary->setObjectName("skullSupportingSeries");
+    m_secondary->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_secondary->setMinimumContentsLength(12);
+    m_secondary->addItem("No supporting T2 · T1 only", -1);
+    skullLayout->addWidget(m_secondary);
+    m_extractSkull = button("Estimate skull from MRI", "extractSkull");
+    skullLayout->addWidget(m_extractSkull);
+    segmentation->addRow(m_skullControls);
     m_lower = spin("lowerThreshold", -1e9, 1e9, 400);
     m_upper = spin("upperThreshold", -1e9, 1e9, 3000);
     segmentation->addRow("Lower intensity", m_lower);
@@ -125,7 +142,7 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
     m_hint = new QLabel;
     m_hint->setWordWrap(true);
     segmentation->addRow(m_hint);
-    m_cancel = button("Cancel brain extraction", "cancelBrain");
+    m_cancel = button("Cancel extraction", "cancelBrain");
     segmentation->addRow(m_cancel);
     m_maskInfo = new QLabel("No current mask.");
     m_maskInfo->setObjectName("maskCoverage");
@@ -279,11 +296,19 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
     connect(m_series, &QComboBox::currentIndexChanged, this, &D2MWidget::selectSeries);
     connect(m_load, &QPushButton::clicked, this, &D2MWidget::loadSelected);
     connect(m_mode, &QComboBox::currentIndexChanged, this, &D2MWidget::modeChanged);
+    connect(m_secondary, &QComboBox::currentIndexChanged, this, [this] {
+        m_skullRequested = false;
+        requestMask();
+    });
+    connect(m_extractSkull, &QPushButton::clicked, this, [this] {
+        m_skullRequested = true;
+        requestMask();
+    });
     connect(m_cancel, &QPushButton::clicked, this, [this] {
         m_debounce.stop();
         m_segmentPending = false;
         m_worker->cancel();
-        m_status->setText("Cancelling brain extraction…");
+        m_status->setText("Cancelling extraction…");
     });
     for (auto *field : {m_lower, m_upper, m_closing})
         connect(field, &QDoubleSpinBox::valueChanged, this, [this] { requestMask(); });
@@ -383,6 +408,7 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
         if (m_segmentPending) {
             m_segmentPending = false;
             startMask();
+            updateActions();
             return;
         }
         m_mask = mask;
@@ -445,7 +471,7 @@ void D2MWidget::openDirectory(const QString &directory) {
     m_volume = nullptr;
     m_mask = nullptr;
     m_maskCurrent = false;
-    m_strokes.clear();
+    resetEdits();
     invalidateMesh();
     for (auto *view : m_views)
         view->setVolume(nullptr);
@@ -465,7 +491,7 @@ void D2MWidget::selectSeries() {
     m_volume = nullptr;
     m_mask = nullptr;
     m_maskCurrent = false;
-    m_strokes.clear();
+    resetEdits();
     invalidateMesh();
     for (auto *view : m_views)
         view->setVolume(nullptr);
@@ -493,7 +519,7 @@ void D2MWidget::loadSelected() {
     m_volume = nullptr;
     m_mask = nullptr;
     m_maskCurrent = false;
-    m_strokes.clear();
+    resetEdits();
     invalidateMesh();
     for (auto *view : m_views)
         view->setVolume(nullptr);
@@ -503,9 +529,10 @@ void D2MWidget::loadSelected() {
 void D2MWidget::receivedVolume(ImagePtr image, const d2m::VolumeHistogram &histogram) {
     m_busy = false;
     m_volume = image;
+    m_skullRequested = false;
     m_mask = nullptr;
     m_maskCurrent = false;
-    m_strokes.clear();
+    resetEdits();
     m_histogram = histogram;
     m_initializing = true;
     m_lower->setValue(histogram.suggestedLower);
@@ -537,6 +564,17 @@ void D2MWidget::receivedVolume(ImagePtr image, const d2m::VolumeHistogram &histo
                            .arg(directionLabel(image, axis)));
     }
     const auto &series = m_catalog.series[m_series->currentIndex()];
+    {
+        QSignalBlocker block(m_secondary);
+        m_secondary->clear();
+        m_secondary->addItem("No supporting T2 · T1 only", -1);
+        for (size_t i = 0; i < m_catalog.series.size(); ++i) {
+            const auto &s = m_catalog.series[i];
+            if (s.usable() && s.modality == "MR" && s.uid != series.uid &&
+                !series.studyUid.empty() && s.studyUid == series.studyUid)
+                m_secondary->addItem(QString::fromStdString(s.number + " · " + s.description), int(i));
+        }
+    }
     // Brain extraction is explicit: selecting it starts a potentially long inference.
     m_mode->setCurrentIndex(series.modality == "MR" ? 1 : 0);
     modeChanged();
@@ -556,27 +594,46 @@ void D2MWidget::receivedVolume(ImagePtr image, const d2m::VolumeHistogram &histo
     requestMask();
     emit volumeLoaded();
 }
+void D2MWidget::resetEdits() {
+    m_strokes.clear();
+    for (auto &strokes : m_modeStrokes)
+        strokes.clear();
+}
 void D2MWidget::modeChanged() {
     const bool initializing = m_initializing;
     m_initializing = true;
     const int mode = m_mode->currentIndex();
+    if (mode != m_previousMode) {
+        m_modeStrokes[m_previousMode] = m_strokes;
+        m_strokes = m_modeStrokes[mode];
+        m_previousMode = mode;
+    }
     const bool brain = mode == 3;
+    const bool skull = mode == 4;
+    const bool anatomical = brain || skull;
+    m_skullControls->setVisible(skull);
+    m_brush->setMinimum(skull ? 1.0 : 0.1);
     if (m_segmentRunning)
         m_worker->cancel();
     m_largest->setChecked(mode == 1);
     m_fill->setChecked(mode == 1);
     m_closing->setValue(mode == 1 ? 1.0 : 0.0);
-    m_largest->setEnabled(mode != 2 && !brain);
-    m_lower->setEnabled(!brain);
-    m_upper->setEnabled(!brain);
-    m_fill->setEnabled(!brain);
-    m_closing->setEnabled(!brain);
-    findChild<QPushButton *>("autoThreshold")->setEnabled(!brain);
+    m_largest->setEnabled(mode != 2 && !anatomical);
+    m_lower->setEnabled(!anatomical);
+    m_upper->setEnabled(!anatomical);
+    m_fill->setEnabled(!anatomical);
+    m_closing->setEnabled(!anatomical);
+    findChild<QPushButton *>("autoThreshold")->setEnabled(!anatomical);
     m_hint->setText(
         mode == 0 ? "Intensity range only. CT thresholds are not universal for MRI."
         : mode == 1
             ? "Approximate head outline: threshold, gap closing, largest region and slice-hole "
               "filling. Check the mask; this is not automatic brain or skull extraction."
+        : skull
+            ? "Experimental CHARM bone estimate from T1 and optional T2 MRI (can take 15–30 minutes). "
+              "Atlas-based boundaries need review. Includes bone in the scanned neck and jaw. "
+              "Thick or cropped scans produce incomplete, approximate surfaces. This does not recover "
+              "missing facial bones. Paint corrections after estimation."
         : brain
             ? "SynthStrip no-CSF v1 extracts the brain locally on CPU (usually a few minutes). "
               "Review all planes; paint corrections after extraction. Edits use the cached mask. "
@@ -618,10 +675,20 @@ void D2MWidget::requestMask() {
     else
         m_debounce.start();
     m_status->setText("Updating mask…");
+    if (m_mode->currentIndex() == 4 && !m_skullRequested) {
+        m_debounce.stop();
+        m_status->setText("Choose the supporting T2 series, then click Estimate skull from MRI. "
+                          "A T1-weighted MR series must be loaded as the primary image.");
+        m_maskInfo->setText("MRI skull estimation is experimental; no current mask.");
+        updateActions();
+        return;
+    }
     updateActions();
 }
 void D2MWidget::startMask() {
     if (!m_volume || m_busy)
+        return;
+    if (m_mode->currentIndex() == 4 && !m_skullRequested)
         return;
     if (m_segmentRunning) {
         m_segmentPending = true;
@@ -630,17 +697,23 @@ void D2MWidget::startMask() {
     m_segmentRunning = true;
     m_segmentPending = false;
     m_worker->resetCancellation();
-    if (m_mode->currentIndex() == 3) {
-        m_status->setText("Extracting brain locally with SynthStrip, or applying cached corrections…");
+    if (m_mode->currentIndex() >= 3) {
+        m_status->setText(m_mode->currentIndex() == 3
+            ? "Extracting brain locally with SynthStrip, or applying cached corrections…"
+            : "Estimating MRI bone locally with CHARM, or applying cached corrections…");
         m_progress->setRange(0, 0);
     }
     updateActions();
-    emit doSegment(segmentationOptions());
+    const int auxiliary = m_secondary->currentData().toInt();
+    emit doSegment(segmentationOptions(), m_mode->currentIndex() == 4 && auxiliary >= 0
+        ? m_catalog.series[auxiliary] : d2m::DicomSeries{});
 }
 void D2MWidget::invalidateMesh() {
     m_original = nullptr;
     m_processed = nullptr;
     m_actor->SetVisibility(false);
+    if (m_tabs->currentIndex() == 1 && isVisible())
+        m_meshView->renderWindow()->Render();
     m_meshStats->setText("Mask changed. Build the surface to update the 3D preview.");
 }
 void D2MWidget::setBusy(const QString &message) {
@@ -658,7 +731,10 @@ void D2MWidget::updateActions() {
     m_series->setEnabled(!working && !m_catalog.series.empty());
     m_load->setEnabled(!working && valid);
     m_segmentationGroup->setEnabled(!m_busy && bool(m_volume));
-    m_cancel->setEnabled(m_segmentRunning && m_mode->currentIndex() == 3);
+    m_cancel->setEnabled(m_segmentRunning && m_mode->currentIndex() >= 3);
+    m_extractSkull->setEnabled(!working && bool(m_volume) && valid &&
+                               m_catalog.series[index].modality == "MR");
+    m_secondary->setEnabled(!working);
     m_build->setEnabled(!working && m_maskCurrent);
     m_process->setEnabled(!working && bool(m_original));
     m_save->setEnabled(!working && bool(m_original) &&
@@ -696,7 +772,8 @@ void D2MWidget::showMesh(bool resetCamera) {
         m_meshView->renderWindow()->Render();
 }
 void D2MWidget::saveModel() {
-    QString path = QFileDialog::getSaveFileName(this, "Export visible surface", "surface.stl",
+    QString path = QFileDialog::getSaveFileName(this, "Export visible surface",
+                                                m_mode->currentIndex() == 4 ? "skull-mri-estimate.stl" : "surface.stl",
                                                 "STL (*.stl);;OBJ (*.obj);;PLY (*.ply)");
     if (path.isEmpty())
         return;
@@ -710,9 +787,10 @@ void D2MWidget::fail(const QString &operation, const QString &message) {
         if (m_segmentPending) {
             m_segmentPending = false;
             startMask();
+            updateActions();
             return;
         }
-        m_maskInfo->setText("No current mask. Brain extraction can be retried by selecting its method again.");
+        m_maskInfo->setText("No current mask. Check the extraction settings before retrying.");
     }
     m_status->setText(message);
     updateActions();

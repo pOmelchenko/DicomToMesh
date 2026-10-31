@@ -174,7 +174,7 @@ views, not a resliced anatomical atlas. Brightness/window controls affect
 display only. A sampled histogram and Otsu suggestion help choose an
 intensity range; the green overlay shows the actual segmentation mask.
 
-Four methods are available:
+Five methods are available:
 
 - **Threshold:** an intensity range for CT or manual selection. A CT bone
   threshold is not a universal MRI threshold.
@@ -191,12 +191,21 @@ Four methods are available:
   to stop it. The result is cached for the loaded series, so painting and
   undo do not run the network again. Threshold and morphology controls are
   disabled for this method.
+- **Skull · MRI estimate (experimental):** CHARM estimates compact and spongy
+  bone from a primary T1-weighted MR image and an optional supporting T2.
+  Choose the T2 from the same DICOM study, then click **Estimate skull from MRI**.
+  This is an atlas-based estimate; thick or incomplete scans can produce
+  substantial errors and an incomplete skull. The mask also contains bone
+  in the scanned jaw and neck. Threshold/morphology controls are disabled.
 
 Enable **Paint corrections / place seeds** to add with the left mouse
 button and erase with the right mouse button in any plane. Brush size is
 in millimetres; strokes can be undone or cleared. Corrections take
 precedence over automatic hole filling. Masks and edits remain in the
-current session; export the surface before loading another series.
+current session, separately for each method; export the surface before
+loading another series. Skull corrections are applied to its finer distance
+field in physical coordinates; the slice overlay samples that same field.
+The skull brush has a minimum radius of 1 mm.
 
 Click **Build surface** after reviewing the mask. The 3D view is embedded
 in the application. Optional interpolation reduces stair steps but does
@@ -258,6 +267,50 @@ and are subject to the terms and conditions in
 See [source revision, modifications and model attribution](scripts/vendor/synthstrip/NOTICE.md).
 The separately downloaded weights use the authors' CC BY 4.0 option.
 
+## Optional experimental skull estimation from MRI
+
+The managed CHARM environment currently supports **Apple Silicon with macOS
+14+**. It has a separate manifest and lock so its Python 3.11/NumPy 2/Qt 5
+dependencies do not change the application or brain environments:
+
+```bash
+pixi run skull-setup
+pixi run skull-check
+pixi run gui
+```
+
+Load a **T1-weighted** MR series as the primary image. Choose **Skull · MRI
+estimate (experimental)** and select a corresponding **T2-weighted** series
+from the supporting-series list. The application checks the Study Instance
+UID and rejects combining different studies or the primary series with
+itself. Contrast weighting still needs to be selected by the user; an MR
+modality tag alone does not identify T1 versus T2.
+
+Click **Estimate skull from MRI**. CHARM registers T2 to T1, aligns its atlas,
+and estimates tissue classes using the local CPU. T1 alone is supported
+but is less informative for skull boundaries. Expect roughly 15–30 minutes
+for a full estimate; cancellation also stops backend child processes.
+Painting and undo reuse the last estimate for that primary/supporting pair.
+Changing the supporting series requires another estimate. All processing
+and intermediates stay local, and the temporary directory is removed on
+success, failure or cancellation.
+
+Review the mask against the source slices, then build and compare surfaces.
+The surface retains CHARM's finer estimation grid; it is not limited to a
+binary mask sampled only at thick acquisition planes. Optional 1 mm surface
+interpolation reduces mesh size. That grid and interpolation do not establish
+equivalent anatomical resolution. No missing face or skull-base anatomy is
+reconstructed outside the scanned field. A whole, accurate skull model is
+not assured by these MRI sequences or by a successful software test.
+
+For other supported SimNIBS platforms, `D2M_SKULL_PYTHON` can point to a
+separately installed SimNIBS 4.6.0 interpreter. Such installations are not
+covered by the optional Apple Silicon lock or the local runtime checks.
+
+See the [CHARM documentation](https://simnibs.github.io/simnibs/build/html/documentation/command_line/charm.html)
+and [backend license/attribution](scripts/licenses/CHARM.md). Inference uses
+the installed atlas and does not download network models or upload scans.
+
 The CLI also supports approximate head outlines and optional interpolation:
 
 ```bash
@@ -283,11 +336,19 @@ The optional environment also has geometry and model-integrity tests:
 pixi run -e brain brain-test
 ```
 
+`pixi run skull-test` runs the geometry and output checks in the separate
+CHARM environment. Qt tests additionally cover supporting-study selection,
+cache invalidation, fine-grid edits, cancellation and MRI skull controls.
+
 For a local end-to-end inference check with an existing study, set
 `D2M_BRAIN_TEST_DICOM` to its directory and `D2M_BRAIN_TEST_SERIES` to the
 selected UID, then run `runGuiTests realBrainExtraction` through Pixi.
 `D2M_BRAIN_TEST_OUTPUT` optionally exports its original surface as STL.
 These variables are unset in CI; no patient data is included in fixtures.
+
+The equivalent optional skull test is `runGuiTests realSkullExtraction`:
+set `D2M_SKULL_TEST_DICOM`, `D2M_SKULL_TEST_SERIES` (T1 UID), optional
+`D2M_SKULL_TEST_T2` (supporting UID), and `D2M_SKULL_TEST_OUTPUT` (STL path).
 
 The icons in the gui were made by <a href="https://www.flaticon.com/authors/smashicons" title="Smashicons">Smashicons</a> from <a href="https://www.flaticon.com/" title="Flaticon">www.flaticon.com</a>. The license is <a href="http://creativecommons.org/licenses/by/3.0/" title="Creative Commons BY 3.0" target="_blank">CC 3.0 BY</a>
 

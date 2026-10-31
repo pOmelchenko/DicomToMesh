@@ -9,7 +9,7 @@ SET(CMAKE_AUTORCC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets GLOBAL)
 find_package(VTK 9 REQUIRED COMPONENTS GUISupportQt RenderingOpenGL2 RenderingCore InteractionStyle)
 
-SET( APP_SOURCES d2mWidget.cpp dicomConverter.cpp sliceView.cpp brainExtractor.cpp)
+SET( APP_SOURCES d2mWidget.cpp dicomConverter.cpp sliceView.cpp anatomyExtractor.cpp)
 SET( APP_INCLUDE_DIRS . )
 
 include_directories( ${APP_INCLUDE_DIRS} )

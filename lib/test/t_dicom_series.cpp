@@ -176,3 +176,16 @@ TEST(DicomSeries, RejectsRgbAndMultiFrameSeries) {
         file.saveFile((folder.path / "1.dcm").string().c_str(), EXS_LittleEndianExplicit).good());
     EXPECT_FALSE(d2m::scanDicomDirectory(folder.path.string()).series[0].usable());
 }
+TEST(DicomSeries, PreservesStudyIdentityAndRejectsChangesAfterInspection) {
+    fixture::Directory folder;
+    fixture::Slice slice;
+    fixture::stack(folder.path, slice);
+    const auto series = d2m::scanDicomDirectory(folder.path.string()).series[0];
+    EXPECT_EQ(series.studyUid, slice.studyUid);
+    DcmFileFormat file;
+    ASSERT_TRUE(file.loadFile((folder.path / "1.dcm").string().c_str()).good());
+    file.getDataset()->putAndInsertString(DCM_StudyInstanceUID, "1.2.826.0.1.3680043.10.999.999");
+    ASSERT_TRUE(file.saveFile((folder.path / "1.dcm").string().c_str(), EXS_LittleEndianExplicit).good());
+    EXPECT_THROW(d2m::loadDicomSeries(series), std::runtime_error);
+    EXPECT_FALSE(d2m::scanDicomDirectory(folder.path.string()).series[0].usable());
+}

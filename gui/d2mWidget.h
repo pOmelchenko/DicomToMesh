@@ -31,7 +31,7 @@ class D2MWidget : public QWidget {
   signals:
     void doScan(const QString &directory);
     void doLoad(const d2m::DicomSeries &series);
-    void doSegment(const d2m::SegmentationOptions &options);
+    void doSegment(const d2m::SegmentationOptions &options, const d2m::DicomSeries &secondary);
     void doBuild(double spacing, const MeshOptions &options);
     void doProcess(const MeshOptions &options);
     void doSave(const QString &path, bool original);
@@ -56,19 +56,24 @@ class D2MWidget : public QWidget {
     void applyProcessing();
     void saveModel();
     void fail(const QString &operation, const QString &message);
+    void resetEdits();
 
     QThread m_thread;
     DicomConverter *m_worker;
     d2m::DicomCatalog m_catalog;
     d2m::VolumeHistogram m_histogram;
     std::vector<d2m::MaskStroke> m_strokes;
+    std::array<std::vector<d2m::MaskStroke>, 5> m_modeStrokes;
+    int m_previousMode = 0;
     ImagePtr m_volume, m_mask;
     MeshPtr m_original, m_processed;
     bool m_busy = false, m_segmentRunning = false, m_segmentPending = false, m_initializing = false,
-         m_maskCurrent = false, m_processingDirty = false;
+         m_maskCurrent = false, m_processingDirty = false, m_skullRequested = false;
     QTimer m_debounce;
-    QPushButton *m_open, *m_load, *m_build, *m_process, *m_save, *m_undo, *m_clear, *m_cancel;
-    QComboBox *m_series, *m_mode, *m_comparison;
+    QPushButton *m_open, *m_load, *m_build, *m_process, *m_save, *m_undo, *m_clear, *m_cancel,
+        *m_extractSkull;
+    QComboBox *m_series, *m_mode, *m_comparison, *m_secondary;
+    QWidget *m_skullControls;
     QLabel *m_details, *m_status, *m_hint, *m_meshStats, *m_maskInfo;
     QProgressBar *m_progress;
     QDoubleSpinBox *m_lower, *m_upper, *m_closing, *m_windowLow, *m_windowHigh, *m_brush,

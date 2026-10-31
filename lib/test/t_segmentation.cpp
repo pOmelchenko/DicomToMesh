@@ -154,6 +154,7 @@ TEST(Segmentation, RejectsInvalidOriginAndDirection) {
 TEST(Segmentation, BrainRequiresDedicatedBackendAndCorrectionsPreserveSource) {
     auto image = volume();
     EXPECT_THROW(d2m::segmentVolume(image, {d2m::SegmentationMode::Brain}), std::runtime_error);
+    EXPECT_THROW(d2m::segmentVolume(image, {d2m::SegmentationMode::SkullMRI}), std::runtime_error);
     set(image, 4, 4, 4, 100);
     auto mask = d2m::segmentVolume(image, {d2m::SegmentationMode::Threshold, 50, 150});
     const auto corrected = d2m::correctMask(mask, {{{4, 4, 4}, 0.1, false}, {{0, 4, 4}, 0.1, true}});
@@ -178,4 +179,36 @@ TEST(Segmentation, DistanceSurfacePreservesPhysicalCoordinatesAndSource) {
     EXPECT_NEAR(mesh->GetBounds()[0], 102, 1e-5);
     EXPECT_NEAR(mesh->GetBounds()[1], 106, 1e-5);
     EXPECT_EQ(get(image, 4, 4, 4), -1);
+}
+TEST(Segmentation, DistanceCorrectionsMapFromNativeToUpsampledPatientCoordinates) {
+    auto reference = volume();
+    reference->SetOrigin(100, 200, 300);
+    reference->SetSpacing(1, 2, 3);
+    reference->SetDirectionMatrix(0, -1, 0, 1, 0, 0, 0, 0, 1);
+    auto field = volume(17);
+    field->SetOrigin(reference->GetOrigin());
+    field->SetSpacing(.5, 1, 1.5);
+    field->SetDirectionMatrix(reference->GetDirectionMatrix());
+    std::fill_n(static_cast<float *>(field->GetScalarPointer()), 17 * 17 * 17, -2);
+    const auto edited = d2m::correctDistance(field, reference, {{{4, 4, 4}, .1, false}});
+    EXPECT_GE(get(edited, 8, 8, 8), 1);
+    EXPECT_LT(get(edited, 9, 8, 8), 1);
+    EXPECT_EQ(get(field, 8, 8, 8), -2);
+}
+TEST(Segmentation, DistanceOverlaySamplesTheSamePhysicalFieldAsTheSurface) {
+    auto reference = volume(4);
+    reference->SetOrigin(100, 200, 300);
+    reference->SetDirectionMatrix(0, -1, 0, 1, 0, 0, 0, 0, 1);
+    auto field = volume();
+    field->SetOrigin(99.75, 200.25, 300.25);
+    field->SetSpacing(.5, .5, .5);
+    field->SetDirectionMatrix(reference->GetDirectionMatrix());
+    for (int z = 0; z < 9; ++z)
+        for (int y = 0; y < 9; ++y)
+            for (int x = 0; x < 9; ++x)
+                set(field, x, y, z, x < 5 ? -1 : 3);
+    const auto mask = d2m::maskFromDistance(field, reference);
+    EXPECT_EQ(get(mask, 1, 1, 1), 1);
+    EXPECT_EQ(get(mask, 3, 1, 1), 0);
+    EXPECT_EQ(get(mask, 0, 0, 0), 0);
 }

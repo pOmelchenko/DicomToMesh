@@ -17,30 +17,64 @@ void DicomConverter::load(const d2m::DicomSeries &series) {
         m_volume = nullptr;
         m_brainMask = nullptr;
         m_brainDistance = nullptr;
-        m_useBrainDistance = false;
+        m_skullMask = nullptr;
+        m_skullDistance = nullptr;
+        m_surfaceDistance = nullptr;
+        m_modality.clear();
+        m_studyUid.clear();
+        m_primaryUid.clear();
+        m_skullSecondary.clear();
         m_mask = nullptr;
         m_original = nullptr;
         m_processed = nullptr;
         m_volume = d2m::loadDicomSeries(series, [this](double p) { emit progress(int(p * 100)); });
+        m_modality = series.modality;
+        m_studyUid = series.studyUid;
+        m_primaryUid = series.uid;
         emit volumeReady(m_volume, d2m::volumeHistogram(m_volume));
     } catch (const std::exception &e) {
         emit failed("load", QString::fromUtf8(e.what()));
     }
 }
-void DicomConverter::segment(const d2m::SegmentationOptions &options) {
+void DicomConverter::segment(const d2m::SegmentationOptions &options,
+                             const d2m::DicomSeries &secondary) {
     m_mask = nullptr;
     m_original = nullptr;
     m_processed = nullptr;
-    m_useBrainDistance = false;
+    m_surfaceDistance = nullptr;
     try {
         if (options.mode == d2m::SegmentationMode::Brain) {
             if (!m_brainMask) {
-                const auto brain = extractBrain(m_volume, m_brainRuntime, m_cancelled);
+                const auto brain = extractAnatomy(m_volume, m_brainRuntime, m_cancelled);
                 m_brainMask = brain.mask;
                 m_brainDistance = brain.distance;
             }
             m_mask = d2m::correctMask(m_brainMask, options.strokes);
-            m_useBrainDistance = options.strokes.empty();
+            if (options.strokes.empty())
+                m_surfaceDistance = m_brainDistance;
+        } else if (options.mode == d2m::SegmentationMode::SkullMRI) {
+            if (m_modality != "MR")
+                throw std::runtime_error("MRI skull estimation requires a T1-weighted MR series.");
+            if (!secondary.uid.empty() && (!secondary.usable() || secondary.modality != "MR"))
+                throw std::runtime_error("Choose a valid T2-weighted MR supporting series.");
+            if (!secondary.uid.empty() && (secondary.uid == m_primaryUid || m_studyUid.empty() ||
+                                           secondary.studyUid != m_studyUid))
+                throw std::runtime_error(
+                    "The supporting T2 must be a different series from the same DICOM study.");
+            if (!m_skullMask || m_skullSecondary != secondary.uid) {
+                ImagePtr support;
+                if (!secondary.uid.empty())
+                    support = d2m::loadDicomSeries(secondary);
+                const auto skull = extractAnatomy(m_volume, m_skullRuntime, m_cancelled, support);
+                m_skullMask = skull.mask;
+                m_skullDistance = skull.distance;
+                m_skullSecondary = secondary.uid;
+            }
+            m_surfaceDistance =
+                options.strokes.empty()
+                    ? m_skullDistance
+                    : d2m::correctDistance(m_skullDistance, m_volume, options.strokes);
+            m_mask = d2m::maskFromDistance(m_surfaceDistance, m_volume);
         } else
             m_mask = d2m::segmentVolume(m_volume, options);
         emit maskReady(m_mask);
@@ -70,8 +104,8 @@ void DicomConverter::build(double spacing, const MeshOptions &options) {
     try {
         if (!m_mask || !d2m::summarizeMask(m_mask).foreground)
             throw std::runtime_error("Review a non-empty mask before building a surface.");
-        m_original = m_useBrainDistance ? d2m::surfaceFromDistance(m_brainDistance, spacing)
-                                      : d2m::surfaceFromMask(m_mask, spacing);
+        m_original = m_surfaceDistance ? d2m::surfaceFromDistance(m_surfaceDistance, spacing)
+                                       : d2m::surfaceFromMask(m_mask, spacing);
         if (!m_original->GetNumberOfCells())
             throw std::runtime_error(
                 "The mask has no surface. Adjust the thresholds or paint the target region.");

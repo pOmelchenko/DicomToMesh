@@ -21,7 +21,7 @@ struct DicomSlice {
 };
 
 struct DicomSeries {
-    std::string uid, number, description, modality;
+    std::string uid, number, description, modality, studyUid;
     std::vector<DicomSlice> slices;
     std::array<double, 3> spacing{};
     std::array<double, 9> direction{}; // columns are the image axes in DICOM LPS

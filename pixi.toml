@@ -25,6 +25,9 @@ build = { cmd = "cmake --build build/pixi --parallel", depends-on = ["configure"
 cli = { cmd = "./build/pixi/dicom2mesh/dicom2mesh", depends-on = ["build"], description = "Run the CLI; append DicomToMesh arguments" }
 gui = { cmd = "./build/pixi/gui/dicom2meshgui", depends-on = ["build"], description = "Launch the Qt GUI" }
 test = { cmd = "cmake -E copy_directory ../../lib/test/data lib/test/data && ./lib/runLibTests && ./dicom2mesh/runD2MTests && ./gui/runGuiTests", cwd = "build/pixi", env = { QT_QPA_PLATFORM = "offscreen" }, depends-on = ["build"], description = "Run the library, CLI and GUI tests in the build directory" }
+skull-setup = { cmd = "pixi install --manifest-path environments/skull/pixi.toml --locked", description = "Install optional CHARM for MRI bone estimates (Apple Silicon, macOS 14+)" }
+skull-check = { cmd = "pixi run --manifest-path environments/skull/pixi.toml --locked check", description = "Check the optional local MRI skull backend" }
+skull-test = { cmd = "pixi run --manifest-path environments/skull/pixi.toml --locked test", description = "Test the optional MRI skull bridge" }
 
 [target.osx.tasks]
 gui = { cmd = "./build/pixi/gui/dicom2meshgui.app/Contents/MacOS/dicom2meshgui", depends-on = ["build"], description = "Launch the macOS Qt application" }

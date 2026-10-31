@@ -274,8 +274,8 @@ VolumeHistogram volumeHistogram(vtkImageData *image) {
 vtkSmartPointer<vtkImageData> segmentVolume(vtkImageData *image,
                                             const SegmentationOptions &options) {
     validateVolume(image);
-    if (options.mode == SegmentationMode::Brain)
-        throw std::runtime_error("Brain segmentation requires the SynthStrip backend.");
+    if (options.mode == SegmentationMode::Brain || options.mode == SegmentationMode::SkullMRI)
+        throw std::runtime_error("This segmentation mode requires its anatomical backend.");
     if (!std::isfinite(options.lower) || !std::isfinite(options.upper) ||
         options.lower > options.upper)
         throw std::runtime_error("The lower threshold must not exceed the upper threshold.");
@@ -350,6 +350,104 @@ vtkSmartPointer<vtkImageData> correctMask(vtkImageData *source,
 }
 vtkSmartPointer<vtkPolyData> surfaceFromMask(vtkImageData *mask, double isotropicSpacing) {
     return extract(mask, 0.5, isotropicSpacing);
+}
+vtkSmartPointer<vtkImageData> correctDistance(vtkImageData *distance, vtkImageData *reference,
+                                             const std::vector<MaskStroke> &strokes) {
+    validateVolume(distance);
+    validateVolume(reference);
+    if (distance->GetScalarType() != VTK_FLOAT)
+        throw std::runtime_error("A float distance field is required.");
+    auto result = vtkSmartPointer<vtkImageData>::New();
+    result->DeepCopy(distance);
+    auto *values = static_cast<float *>(result->GetScalarPointer());
+    const int *d = result->GetDimensions();
+    const double *spacing = result->GetSpacing();
+    for (const auto &stroke : strokes) {
+        if (!std::isfinite(stroke.radiusMm) || stroke.radiusMm <= 0 || stroke.radiusMm > 50)
+            throw std::runtime_error("Brush radius must be between 0 and 50 mm.");
+        double index[3], world[3], center[3];
+        for (int a = 0; a < 3; ++a)
+            index[a] = stroke.center[a];
+        reference->TransformContinuousIndexToPhysicalPoint(index, world);
+        result->TransformPhysicalPointToContinuousIndex(world, center);
+        int lo[3], hi[3];
+        for (int a = 0; a < 3; ++a) {
+            lo[a] = std::max(0, int(std::ceil(center[a] - stroke.radiusMm / spacing[a])));
+            hi[a] = std::min(d[a] - 1, int(std::floor(center[a] + stroke.radiusMm / spacing[a])));
+        }
+        for (int z = lo[2]; z <= hi[2]; ++z)
+            for (int y = lo[1]; y <= hi[1]; ++y)
+                for (int x = lo[0]; x <= hi[0]; ++x) {
+                    const int c[3]{x, y, z};
+                    double squared = 0;
+                    for (int a = 0; a < 3; ++a)
+                        squared += std::pow((c[a] - center[a]) * spacing[a], 2);
+                    if (squared <= stroke.radiusMm * stroke.radiusMm) {
+                        auto &value = values[offset(x, y, z, d)];
+                        value = stroke.foreground ? std::min(value, 0.5f) : std::max(value, 1.5f);
+                    }
+                }
+    }
+    return result;
+}
+vtkSmartPointer<vtkImageData> maskFromDistance(vtkImageData *distance, vtkImageData *reference) {
+    validateVolume(distance);
+    validateVolume(reference);
+    if (distance->GetScalarType() != VTK_FLOAT)
+        throw std::runtime_error("A float distance field is required.");
+    auto result = vtkSmartPointer<vtkImageData>::New();
+    result->CopyStructure(reference);
+    result->AllocateScalars(VTK_UNSIGNED_CHAR, 1);
+    const auto *field = static_cast<float *>(distance->GetScalarPointer());
+    auto *mask = static_cast<unsigned char *>(result->GetScalarPointer());
+    const int *d = distance->GetDimensions(), *n = reference->GetDimensions();
+    double mapping[3][4]{}, zero[3];
+    distance->TransformPhysicalPointToContinuousIndex(reference->GetOrigin(), zero);
+    for (int a = 0; a < 3; ++a)
+        mapping[a][3] = zero[a];
+    for (int b = 0; b < 3; ++b) {
+        double unit[3]{}, world[3], index[3];
+        unit[b] = 1;
+        reference->TransformContinuousIndexToPhysicalPoint(unit, world);
+        distance->TransformPhysicalPointToContinuousIndex(world, index);
+        for (int a = 0; a < 3; ++a)
+            mapping[a][b] = index[a] - zero[a];
+    }
+    for (int z = 0; z < n[2]; ++z)
+        for (int y = 0; y < n[1]; ++y)
+            for (int x = 0; x < n[0]; ++x) {
+                int lo[3], hi[3];
+                double w[3];
+                bool inside = true;
+                for (int a = 0; a < 3; ++a) {
+                    const double q =
+                        mapping[a][3] + mapping[a][0] * x + mapping[a][1] * y + mapping[a][2] * z;
+                    if (q < -1e-6 || q > d[a] - 1 + 1e-6) {
+                        inside = false;
+                        break;
+                    }
+                    const double clamped = std::clamp(q, 0.0, double(d[a] - 1));
+                    lo[a] = int(std::floor(clamped));
+                    hi[a] = std::min(lo[a] + 1, d[a] - 1);
+                    w[a] = clamped - lo[a];
+                }
+                double value = 1000;
+                if (inside) {
+                    value = 0;
+                    for (int corner = 0; corner < 8; ++corner) {
+                        int c[3];
+                        double weight = 1;
+                        for (int a = 0; a < 3; ++a) {
+                            const bool upper = corner & (1 << a);
+                            c[a] = upper ? hi[a] : lo[a];
+                            weight *= upper ? w[a] : 1 - w[a];
+                        }
+                        value += weight * field[offset(c[0], c[1], c[2], d)];
+                    }
+                }
+                mask[offset(x, y, z, n)] = value < 1;
+            }
+    return result;
 }
 vtkSmartPointer<vtkPolyData> surfaceFromDistance(vtkImageData *distance, double isotropicSpacing) {
     validateVolume(distance);

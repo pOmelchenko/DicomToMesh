@@ -1,7 +1,7 @@
 #include "d2mWidget.h"
 #include "dicomFixture.h"
 #include "sliceView.h"
-#include "brainExtractor.h"
+#include "anatomyExtractor.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -14,6 +14,7 @@
 #include <QSurfaceFormat>
 #include <QTabWidget>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -40,7 +41,15 @@ int brainFixture(const QStringList &args) {
     QFile copy(model + ".geometry");
     if (!geometry.open(QIODevice::ReadOnly) || !copy.open(QIODevice::WriteOnly))
         return 1;
-    copy.write(geometry.readAll());
+    const auto metadata = geometry.readAll();
+    copy.write(metadata);
+    if (args.contains("--secondary")) {
+        QFile auxiliary(args.value(args.indexOf("--secondary") + 1) + "/geometry.json");
+        QFile auxiliaryCopy(model + ".secondary");
+        if (!auxiliary.open(QIODevice::ReadOnly) || !auxiliaryCopy.open(QIODevice::WriteOnly))
+            return 5;
+        auxiliaryCopy.write(auxiliary.readAll());
+    }
     QFile count(model + ".calls");
     if (!count.open(QIODevice::Append))
         return 2;
@@ -59,6 +68,37 @@ int brainFixture(const QStringList &args) {
     }
     if (mode == "truncate")
         mask.chop(1);
+    if (mode == "field" || mode == "misaligned") {
+        auto field = QJsonDocument::fromJson(metadata).object();
+        auto dims = field["dimensions"].toArray();
+        auto spacing = field["spacing"].toArray();
+        int original[3], d[3];
+        for (int a = 0; a < 3; ++a) {
+            original[a] = dims[a].toInt();
+            d[a] = original[a] * 2;
+            dims[a] = d[a];
+            spacing[a] = spacing[a].toDouble() / 2;
+        }
+        field["dimensions"] = dims;
+        field["spacing"] = spacing;
+        if (mode == "misaligned") {
+            auto origin = field["originLPS"].toArray();
+            origin[0] = 1000000;
+            field["originLPS"] = origin;
+        }
+        QFile header(work + "/distance-geometry.json");
+        if (!header.open(QIODevice::WriteOnly))
+            return 6;
+        header.write(QJsonDocument(field).toJson());
+        distance.resize(d[0] * d[1] * d[2] * 4);
+        for (int z = 0; z < d[2]; ++z)
+            for (int y = 0; y < d[1]; ++y)
+                for (int x = 0; x < d[0]; ++x) {
+                    const int p = ((z / 2) * original[1] + y / 2) * original[0] + x / 2;
+                    const float value = mask[p] ? -1 : 100;
+                    std::memcpy(distance.data() + ((z * d[1] + y) * d[0] + x) * 4, &value, 4);
+                }
+    }
     QFile m(work + "/mask.u8"), d(work + "/distance.f32");
     if (!m.open(QIODevice::WriteOnly) || !d.open(QIODevice::WriteOnly))
         return 4;
@@ -66,7 +106,7 @@ int brainFixture(const QStringList &args) {
     d.write(distance);
     return 0;
 }
-BrainRuntime fixtureRuntime(const QString &model, const QString &mode = "normal") {
+SegmentationRuntime fixtureRuntime(const QString &model, const QString &mode = "normal") {
     QFile file(model);
     if (!file.open(QIODevice::WriteOnly))
         throw std::runtime_error("Cannot create test model placeholder.");
@@ -91,7 +131,7 @@ class GuiTest : public QObject {
         *static_cast<float *>(volume->GetScalarPointer(1, 2, 3)) = 100;
         auto runtime = fixtureRuntime(directory.filePath("model with an apostrophe's.pt"));
         std::atomic_bool cancelled{false};
-        const auto result = extractBrain(volume, runtime, cancelled);
+        const auto result = extractAnatomy(volume, runtime, cancelled);
         QCOMPARE(result.mask->GetScalarComponentAsDouble(1, 2, 3, 0), 1.0);
         QCOMPARE(result.mask->GetScalarComponentAsDouble(2, 1, 3, 0), 0.0);
         QCOMPARE(result.mask->GetOrigin()[1], 24.0);
@@ -101,8 +141,15 @@ class GuiTest : public QObject {
         const auto metadata = QJsonDocument::fromJson(geometry.readAll()).object();
         QCOMPARE(metadata["originLPS"].toArray()[1].toDouble(), 24.0);
         QCOMPARE(metadata["directionLPS"].toArray()[1].toDouble(), -1.0);
+        runtime.prefixArguments[1] = "field";
+        const auto upsampled = extractAnatomy(volume, runtime, cancelled, volume);
+        QCOMPARE(upsampled.distance->GetDimensions()[0], 8);
+        QCOMPARE(upsampled.distance->GetSpacing()[0], .35);
+        QVERIFY(QFileInfo::exists(runtime.model + ".secondary"));
+        runtime.prefixArguments[1] = "misaligned";
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, extractAnatomy(volume, runtime, cancelled));
         runtime.prefixArguments[1] = "truncate";
-        QVERIFY_THROWS_EXCEPTION(std::runtime_error, extractBrain(volume, runtime, cancelled));
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, extractAnatomy(volume, runtime, cancelled));
         runtime.prefixArguments[1] = "sleep";
         QElapsedTimer timer;
         timer.start();
@@ -110,7 +157,7 @@ class GuiTest : public QObject {
             QThread::msleep(250);
             cancelled.store(true);
         });
-        QVERIFY_THROWS_EXCEPTION(std::runtime_error, extractBrain(volume, runtime, cancelled));
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, extractAnatomy(volume, runtime, cancelled));
         QVERIFY(timer.elapsed() < 5000);
     }
     void brainCorrectionsUseCacheAndReloadInvalidatesIt() {
@@ -119,7 +166,8 @@ class GuiTest : public QObject {
         slice.pixels.assign(64, 0);
         slice.pixels[4 * 8 + 4] = 100;
         fixture::stack(directory.path, slice, 5, 1);
-        const auto runtime = fixtureRuntime(QString::fromStdString((directory.path / "model").string()));
+        const auto runtime =
+            fixtureRuntime(QString::fromStdString((directory.path / "model").string()));
         DicomConverter converter(runtime);
         QSignalSpy masks(&converter, &DicomConverter::maskReady);
         QSignalSpy failures(&converter, &DicomConverter::failed);
@@ -148,12 +196,12 @@ class GuiTest : public QObject {
     void realBrainExtraction() {
         const auto path = qEnvironmentVariable("D2M_BRAIN_TEST_DICOM");
         if (path.isEmpty())
-            QSKIP("Set D2M_BRAIN_TEST_DICOM and D2M_BRAIN_TEST_SERIES for optional local inference.");
+            QSKIP(
+                "Set D2M_BRAIN_TEST_DICOM and D2M_BRAIN_TEST_SERIES for optional local inference.");
         const auto uid = qEnvironmentVariable("D2M_BRAIN_TEST_SERIES");
         const auto catalog = d2m::scanDicomDirectory(path.toStdString());
-        const auto series = std::find_if(catalog.series.begin(), catalog.series.end(), [&](const auto &s) {
-            return s.uid == uid.toStdString();
-        });
+        const auto series = std::find_if(catalog.series.begin(), catalog.series.end(),
+                                         [&](const auto &s) { return s.uid == uid.toStdString(); });
         QVERIFY(series != catalog.series.end());
         DicomConverter converter;
         QSignalSpy masks(&converter, &DicomConverter::maskReady);
@@ -163,18 +211,105 @@ class GuiTest : public QObject {
         d2m::SegmentationOptions options;
         options.mode = d2m::SegmentationMode::Brain;
         converter.segment(options);
-        QVERIFY2(failures.empty(), failures.empty() ? "" : qPrintable(failures.last()[1].toString()));
+        QVERIFY2(failures.empty(),
+                 failures.empty() ? "" : qPrintable(failures.last()[1].toString()));
         QCOMPARE(masks.count(), 1);
         const auto mask = qvariant_cast<ImagePtr>(masks[0][0]);
         QVERIFY(d2m::summarizeMask(mask).foreground > 0);
         converter.build(1, {});
-        QVERIFY2(failures.empty(), failures.empty() ? "" : qPrintable(failures.last()[1].toString()));
+        QVERIFY2(failures.empty(),
+                 failures.empty() ? "" : qPrintable(failures.last()[1].toString()));
         QCOMPARE(meshes.count(), 1);
         const auto mesh = qvariant_cast<MeshPtr>(meshes[0][0]);
         QVERIFY(mesh->GetNumberOfCells() > 0);
         const auto destination = qEnvironmentVariable("D2M_BRAIN_TEST_OUTPUT");
         if (!destination.isEmpty()) {
             converter.save(destination, true);
+            QVERIFY(failures.empty());
+        }
+    }
+    void skullCachesBySupportingSeriesAndRejectsOtherStudies() {
+        fixture::Directory directory;
+        fixture::Slice slice;
+        slice.pixels.assign(64, 0);
+        slice.pixels[4 * 8 + 4] = 100;
+        fixture::stack(directory.path, slice, 5, 1);
+        for (int i = 2; i <= 3; ++i) {
+            const auto folder = directory.path / std::to_string(i);
+            std::filesystem::create_directory(folder);
+            auto auxiliary = slice;
+            auxiliary.uid += "." + std::to_string(i);
+            auxiliary.number = std::to_string(i);
+            fixture::stack(folder, auxiliary, 5, 1);
+        }
+        const auto series = d2m::scanDicomDirectory(directory.path.string()).series;
+        const auto backend =
+            fixtureRuntime(QString::fromStdString((directory.path / "model").string()));
+        DicomConverter converter(backend, backend);
+        QSignalSpy masks(&converter, &DicomConverter::maskReady);
+        QSignalSpy failures(&converter, &DicomConverter::failed);
+        converter.load(series[0]);
+        d2m::SegmentationOptions options;
+        options.mode = d2m::SegmentationMode::SkullMRI;
+        converter.segment(options, series[1]);
+        QCOMPARE(failures.count(), 0);
+        options.strokes = {{{4, 4, 2}, 0.1, false}};
+        converter.segment(options, series[1]);
+        QCOMPARE(masks.count(), 2);
+        QCOMPARE(qvariant_cast<ImagePtr>(masks[1][0])->GetScalarComponentAsDouble(4, 4, 2, 0), 0.0);
+        QFile calls(backend.model + ".calls");
+        QVERIFY(calls.open(QIODevice::ReadOnly));
+        QCOMPARE(calls.readAll(), QByteArray("1"));
+        calls.close();
+        converter.segment(options, series[2]);
+        QVERIFY(calls.open(QIODevice::ReadOnly));
+        QCOMPARE(calls.readAll(), QByteArray("11"));
+        auto unrelated = series[2];
+        unrelated.studyUid += ".999";
+        converter.segment(options, unrelated);
+        QCOMPARE(failures.count(), 1);
+        QVERIFY(failures.last()[1].toString().contains("same DICOM study"));
+        converter.load(series[0]);
+        converter.segment(options, series[0]);
+        QCOMPARE(failures.count(), 2);
+    }
+    void realSkullExtraction() {
+        const auto path = qEnvironmentVariable("D2M_SKULL_TEST_DICOM");
+        if (path.isEmpty())
+            QSKIP(
+                "Set D2M_SKULL_TEST_DICOM and D2M_SKULL_TEST_SERIES for optional local inference.");
+        const auto catalog = d2m::scanDicomDirectory(path.toStdString());
+        auto find = [&](const QString &uid) {
+            for (const auto &s : catalog.series)
+                if (s.uid == uid.toStdString())
+                    return s;
+            return d2m::DicomSeries{};
+        };
+        const auto primary = find(qEnvironmentVariable("D2M_SKULL_TEST_SERIES"));
+        const auto secondary = find(qEnvironmentVariable("D2M_SKULL_TEST_T2"));
+        QVERIFY(!primary.uid.empty());
+        auto backend = SegmentationRuntime::skull();
+        const auto driver = qEnvironmentVariable("D2M_SKULL_TEST_DRIVER");
+        if (!driver.isEmpty())
+            backend.prefixArguments << driver;
+        DicomConverter converter(SegmentationRuntime::defaults(), backend);
+        QSignalSpy failures(&converter, &DicomConverter::failed);
+        QSignalSpy masks(&converter, &DicomConverter::maskReady);
+        QSignalSpy meshes(&converter, &DicomConverter::meshReady);
+        converter.load(primary);
+        d2m::SegmentationOptions options;
+        options.mode = d2m::SegmentationMode::SkullMRI;
+        converter.segment(options, secondary);
+        QVERIFY2(failures.empty(),
+                 failures.empty() ? "" : qPrintable(failures.last()[1].toString()));
+        QCOMPARE(masks.count(), 1);
+        converter.build(1, {});
+        QVERIFY2(failures.empty(),
+                 failures.empty() ? "" : qPrintable(failures.last()[1].toString()));
+        QCOMPARE(meshes.count(), 1);
+        const auto output = qEnvironmentVariable("D2M_SKULL_TEST_OUTPUT");
+        if (!output.isEmpty()) {
+            converter.save(output, true);
             QVERIFY(failures.empty());
         }
     }
@@ -215,6 +350,16 @@ class GuiTest : public QObject {
                 if (image.pixelColor(x, y).red() > 100)
                     ++foreground;
         QVERIFY2(foreground > 10, "The 3D preview framebuffer contains no visible surface.");
+        widget.findChild<QComboBox *>("segmentationMode")->setCurrentIndex(4);
+        QTest::qWait(50);
+        QVERIFY(widget.findChild<QPushButton *>("extractSkull")->isVisible());
+        QCOMPARE(panel->horizontalScrollBar()->maximum(), 0);
+        const auto cleared = view->grabFramebuffer();
+        int stale = 0;
+        for (int y = 0; y < cleared.height(); y += 8)
+            for (int x = 0; x < cleared.width(); x += 8)
+                stale += cleared.pixelColor(x, y).red() > 100;
+        QCOMPARE(stale, 0);
     }
     void defaultProcessingPreservesDetails() {
         D2MWidget widget;
@@ -248,12 +393,55 @@ class GuiTest : public QObject {
         QVERIFY(!widget.findChild<QDoubleSpinBox *>("lowerThreshold")->isEnabled());
         QVERIFY(!widget.findChild<QPushButton *>("autoThreshold")->isEnabled());
         QVERIFY(!widget.findChild<QCheckBox *>("fillHoles")->isEnabled());
-        QTRY_VERIFY_WITH_TIMEOUT(widget.findChild<QLabel *>("statusMessage")->text().contains("pixi install -e brain"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            widget.findChild<QLabel *>("statusMessage")->text().contains("pixi install -e brain"),
+            10000);
         QVERIFY(!widget.findChild<QPushButton *>("buildSurface")->isEnabled());
         const int count = masks.count();
         method->setCurrentIndex(0);
         QTRY_VERIFY_WITH_TIMEOUT(masks.count() > count, 10000);
         QVERIFY(widget.findChild<QDoubleSpinBox *>("lowerThreshold")->isEnabled());
+    }
+    void skullModeWaitsForExplicitEstimateAndListsSupportingSeries() {
+        fixture::Directory directory;
+        fixture::Slice slice;
+        fixture::stack(directory.path, slice, 3, 1);
+        std::filesystem::create_directory(directory.path / "t2");
+        slice.uid += ".2";
+        slice.number = "2";
+        slice.description = "Synthetic T2";
+        fixture::stack(directory.path / "t2", slice, 3, 1);
+        const auto previous = qgetenv("D2M_SKULL_PYTHON");
+        qputenv("D2M_SKULL_PYTHON", "/nonexistent/d2m-skull-python");
+        D2MWidget widget;
+        if (previous.isNull())
+            qunsetenv("D2M_SKULL_PYTHON");
+        else
+            qputenv("D2M_SKULL_PYTHON", previous);
+        QSignalSpy listed(&widget, &D2MWidget::seriesListed);
+        QSignalSpy masks(&widget, &D2MWidget::maskUpdated);
+        widget.openDirectory(QString::fromStdString(directory.path.string()));
+        QTRY_COMPARE_WITH_TIMEOUT(listed.count(), 1, 10000);
+        widget.findChild<QPushButton *>("loadSeries")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!masks.empty(), 10000);
+        widget.findChild<SliceView *>("sliceView2")->brushAt(3, 3, 1, true);
+        const int beforePaint = masks.count();
+        QTRY_VERIFY_WITH_TIMEOUT(masks.count() > beforePaint, 10000);
+        QVERIFY(widget.findChild<QPushButton *>("undoStroke")->isEnabled());
+        widget.findChild<QComboBox *>("segmentationMode")->setCurrentIndex(4);
+        QVERIFY(!widget.findChild<QPushButton *>("undoStroke")->isEnabled());
+        widget.findChild<QComboBox *>("segmentationMode")->setCurrentIndex(1);
+        QVERIFY(widget.findChild<QPushButton *>("undoStroke")->isEnabled());
+        widget.findChild<QComboBox *>("segmentationMode")->setCurrentIndex(4);
+        QVERIFY(widget.findChild<QPushButton *>("extractSkull")->isEnabled());
+        QVERIFY(!widget.findChild<QPushButton *>("buildSurface")->isEnabled());
+        QVERIFY(widget.findChild<QLabel *>("statusMessage")->text().contains("click Estimate"));
+        QCOMPARE(widget.findChild<QComboBox *>("skullSupportingSeries")->count(), 2);
+        QVERIFY(!widget.findChild<QDoubleSpinBox *>("lowerThreshold")->isEnabled());
+        widget.findChild<QPushButton *>("extractSkull")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(
+            widget.findChild<QLabel *>("statusMessage")->text().contains("pixi run skull-setup"),
+            10000);
     }
     void listsAllSeriesAndRejectsLocalizerWithoutAutoLoading() {
         fixture::Directory directory;

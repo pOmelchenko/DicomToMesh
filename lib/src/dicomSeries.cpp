@@ -142,9 +142,11 @@ DicomCatalog scanDicomDirectory(const std::string &directory) {
         series.uid = uid;
         const auto description = text(ds, DCM_SeriesDescription);
         const auto modality = text(ds, DCM_Modality);
+        const auto studyUid = text(ds, DCM_StudyInstanceUID);
         if (series.slices.empty()) {
             series.description = description;
             series.modality = modality;
+            series.studyUid = studyUid;
             series.number = text(ds, DCM_SeriesNumber);
         }
         auto type = text(ds, DCM_ImageType) + " " + description;
@@ -190,6 +192,8 @@ DicomCatalog scanDicomDirectory(const std::string &directory) {
                           "a single-frame series.";
         if (modality != series.modality)
             slice.error = "Inconsistent modality within a series.";
+        if (studyUid != series.studyUid)
+            slice.error = "Inconsistent study identity within a series.";
         series.slices.push_back(std::move(slice));
     }
     for (auto &group : groups) {
@@ -244,6 +248,7 @@ vtkSmartPointer<vtkImageData> loadDicomSeries(const DicomSeries &input,
         auto &ds = *file.getDataset();
         if (integer(ds, DCM_Rows) != slice.rows || integer(ds, DCM_Columns) != slice.columns ||
             text(ds, DCM_SeriesInstanceUID) != series.uid ||
+            text(ds, DCM_StudyInstanceUID) != series.studyUid ||
             integer(ds, DCM_BitsAllocated) != slice.bitsAllocated ||
             integer(ds, DCM_BitsStored) != slice.bitsStored ||
             integer(ds, DCM_HighBit) != slice.highBit ||

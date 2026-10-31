@@ -1,0 +1,37 @@
+[workspace]
+name = "dicom-skull-runtime"
+channels = ["conda-forge"]
+platforms = [{ platform = "osx-arm64", macos = "14.0" }]
+
+[dependencies]
+python = "3.11.*"
+pip = ">=25,<27"
+numpy = "2.3.*"
+scipy = "1.17.*"
+h5py = "3.15.*"
+nibabel = "5.3.*"
+matplotlib-base = "3.10.*"
+jsonschema = "4.26.*"
+requests = "2.32.*"
+pillow = "12.1.*"
+python-mumps = "0.0.6.*"
+mpfr = "4.2.*"
+libwebp = "1.6.*"
+
+[pypi-dependencies]
+simnibs = { url = "https://github.com/simnibs/simnibs/releases/download/v4.6.0/simnibs-4.6.0-cp311-cp311-macosx_11_0_arm64.whl" }
+samseg = { url = "https://github.com/oulap/samseg_wheels/releases/download/dev/samseg-0.5a0-cp311-cp311-macosx_14_0_arm64.whl" }
+cortech = { url = "https://github.com/simnibs/cortech/releases/download/v0.1/cortech-0.1-cp311-cp311-macosx_11_0_arm64.whl" }
+fmm3dpy = { url = "https://github.com/simnibs/fmm3dpy/releases/download/v1.0.4/fmm3dpy-1.0.4-cp311-cp311-macosx_14_0_arm64.whl" }
+petsc4py = { url = "https://github.com/simnibs/petsc4py/releases/download/v3.22.2/petsc4py-3.22.2-cp311-cp311-macosx_14_0_arm64.whl" }
+brainnet = { git = "https://github.com/simnibs/brainnet", tag = "v0.2" }
+brainsynth = { git = "https://github.com/simnibs/brainsynth", tag = "v0.1" }
+gmsh = "==4.14.0"
+numba = "==0.64.0"
+pygpc = "==0.4.4"
+pyqt5 = "==5.15.11"
+torch = "==2.6.0"
+
+[tasks]
+check = { cmd = "python scripts/skull_extract.py --check", cwd = "../.." }
+test = { cmd = "python -m unittest discover -s scripts/tests -v", cwd = "../.." }

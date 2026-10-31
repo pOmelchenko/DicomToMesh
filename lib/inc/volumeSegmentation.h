@@ -8,7 +8,7 @@ class vtkImageData;
 class vtkPolyData;
 
 namespace d2m {
-enum class SegmentationMode { Threshold, HeadOutline, SeededRegion, Brain };
+enum class SegmentationMode { Threshold, HeadOutline, SeededRegion, Brain, SkullMRI };
 struct MaskStroke {
     std::array<int, 3> center{};
     double radiusMm = 2;
@@ -35,7 +35,7 @@ struct MaskSummary {
 };
 MaskSummary summarizeMask(vtkImageData *mask);
 vtkSmartPointer<vtkImageData> correctMask(vtkImageData *mask,
-                                         const std::vector<MaskStroke> &strokes);
+                                          const std::vector<MaskStroke> &strokes);
 vtkSmartPointer<vtkImageData> segmentVolume(vtkImageData *image,
                                             const SegmentationOptions &options);
 // Extraction happens in image-local coordinates, followed by an explicit LPS
@@ -43,7 +43,10 @@ vtkSmartPointer<vtkImageData> segmentVolume(vtkImageData *image,
 vtkSmartPointer<vtkPolyData> surfaceFromMask(vtkImageData *mask, double isotropicSpacing = 0);
 // Signed distance in millimetres, negative inside. SynthStrip uses border=1.
 vtkSmartPointer<vtkPolyData> surfaceFromDistance(vtkImageData *distance,
-                                                double isotropicSpacing = 0);
+                                                 double isotropicSpacing = 0);
+vtkSmartPointer<vtkImageData> correctDistance(vtkImageData *distance, vtkImageData *reference,
+                                              const std::vector<MaskStroke> &strokes);
+vtkSmartPointer<vtkImageData> maskFromDistance(vtkImageData *distance, vtkImageData *reference);
 vtkSmartPointer<vtkPolyData> intensitySurface(vtkImageData *image, double lower,
                                               bool useUpper = false, double upper = 0);
 } // namespace d2m

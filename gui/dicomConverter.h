@@ -1,7 +1,7 @@
 #pragma once
 #include "dicomSeries.h"
 #include "volumeSegmentation.h"
-#include "brainExtractor.h"
+#include "anatomyExtractor.h"
 #include <QObject>
 #include <vtkImageData.h>
 #include <vtkPolyData.h>
@@ -25,15 +25,16 @@ Q_DECLARE_METATYPE(MeshOptions)
 class DicomConverter : public QObject {
     Q_OBJECT
   public:
-    explicit DicomConverter(BrainRuntime runtime = BrainRuntime::defaults())
-        : m_brainRuntime(std::move(runtime)) {}
+    explicit DicomConverter(SegmentationRuntime runtime = SegmentationRuntime::defaults(),
+                            SegmentationRuntime skull = SegmentationRuntime::skull())
+        : m_brainRuntime(std::move(runtime)), m_skullRuntime(std::move(skull)) {}
     // These two methods touch only an atomic flag and may be called by the UI.
     void cancel() { m_cancelled.store(true); }
     void resetCancellation() { m_cancelled.store(false); }
   public slots:
     void scan(const QString &directory);
     void load(const d2m::DicomSeries &series);
-    void segment(const d2m::SegmentationOptions &options);
+    void segment(const d2m::SegmentationOptions &options, const d2m::DicomSeries &secondary = {});
     void build(double isotropicSpacing, const MeshOptions &options);
     void process(const MeshOptions &options);
     void save(const QString &path, bool original);
@@ -47,10 +48,11 @@ class DicomConverter : public QObject {
     void progress(int percent);
 
   private:
-    ImagePtr m_volume, m_mask, m_brainMask, m_brainDistance;
+    ImagePtr m_volume, m_mask, m_brainMask, m_brainDistance, m_skullMask, m_skullDistance,
+        m_surfaceDistance;
     MeshPtr m_original, m_processed;
-    BrainRuntime m_brainRuntime;
+    SegmentationRuntime m_brainRuntime, m_skullRuntime;
+    std::string m_modality, m_studyUid, m_primaryUid, m_skullSecondary;
     std::atomic_bool m_cancelled{false};
-    bool m_useBrainDistance = false;
     void processMesh(const MeshOptions &options);
 };

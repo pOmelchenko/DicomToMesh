@@ -12,6 +12,7 @@
 namespace fixture {
 struct Slice {
     std::string uid = "1.2.826.0.1.3680043.10.999.1", description = "Synthetic T1", number = "1";
+    std::string studyUid = "1.2.826.0.1.3680043.10.999.100";
     std::array<double, 3> position{0, 0, 0};
     std::array<double, 6> orientation{1, 0, 0, 0, 1, 0};
     std::array<double, 2> spacing{2, 1};
@@ -39,7 +40,7 @@ inline void write(const std::filesystem::path &path, const Slice &s,
     char uid[100];
     dcmGenerateUniqueIdentifier(uid, SITE_INSTANCE_UID_ROOT);
     ds.putAndInsertString(DCM_SOPInstanceUID, uid);
-    ds.putAndInsertString(DCM_StudyInstanceUID, "1.2.826.0.1.3680043.10.999.100");
+    ds.putAndInsertString(DCM_StudyInstanceUID, s.studyUid.c_str());
     ds.putAndInsertString(DCM_SeriesInstanceUID, s.uid.c_str());
     ds.putAndInsertString(DCM_SeriesDescription, s.description.c_str());
     ds.putAndInsertString(DCM_SeriesNumber, s.number.c_str());
