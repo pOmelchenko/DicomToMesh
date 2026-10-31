@@ -174,7 +174,7 @@ views, not a resliced anatomical atlas. Brightness/window controls affect
 display only. A sampled histogram and Otsu suggestion help choose an
 intensity range; the green overlay shows the actual segmentation mask.
 
-Three methods are available:
+Four methods are available:
 
 - **Threshold:** an intensity range for CT or manual selection. A CT bone
   threshold is not a universal MRI threshold.
@@ -185,6 +185,12 @@ Three methods are available:
   manually painted foreground seeds. Right-button erasing can create
   barriers against leakage. This provides a manual-assisted tool for
   selecting a region such as brain tissue; all boundaries need review.
+- **Brain · SynthStrip:** dedicated local brain extraction with the no-CSF
+  version 1 model. This needs the optional environment described below.
+  Selecting the method starts CPU inference; use **Cancel brain extraction**
+  to stop it. The result is cached for the loaded series, so painting and
+  undo do not run the network again. Threshold and morphology controls are
+  disabled for this method.
 
 Enable **Paint corrections / place seeds** to add with the left mouse
 button and erase with the right mouse button in any plane. Brush size is
@@ -207,6 +213,51 @@ workflow does not invent missing anatomy or automatically repair it for
 printing. Coarse MRI with thick/gapped slices yields only an approximate
 surface, regardless of interpolation or smoothing.
 
+The mask coverage message lists scan faces touched by the segmentation.
+Inspect those end slices: contact can mean truncated anatomy and an open
+surface. Lack of contact alone does not establish segmentation accuracy.
+
+## Optional brain extraction
+
+From the repository root, install the separate CPU environment and download
+the verified 29 MB model once:
+
+```bash
+pixi install -e brain --locked
+pixi run -e brain brain-setup
+pixi run gui
+```
+
+Load an anatomical MR series, select **Brain · SynthStrip (local CPU)**,
+then review the green overlay throughout all three image planes before
+building. Inference can take a few minutes. The original scan is not
+modified or uploaded; temporary anonymous voxel/geometry files are deleted
+after inference. Network access is used only by the explicit model setup
+command. Intermediate volumes, masks, surfaces and weights stay in ignored
+build/cache directories.
+
+SynthStrip predicts a signed distance to the brain boundary using a
+network trained on synthetic image contrasts and resolutions. The unedited
+surface uses that distance field (border 1 mm); largest-component selection
+and hole filling are reconciled with the reviewed binary mask. After brush
+edits, extraction follows the edited binary mask. Optional interpolation
+operates inside the acquired field of view and cannot recover missing
+brain or accurate fine cortical folds from thick slices.
+
+The brain Python environment is independent of the C++/VTK environment.
+For a system build, `D2M_BRAIN_PYTHON` can point to an equivalent Python
+interpreter with PyTorch, Surfa and NumPy; the build uses the helper and
+verified model under its source tree. This is a source-tree workflow,
+not a standalone distributable application bundle.
+
+Method: [Hoopes et al., SynthStrip (2022)](https://doi.org/10.1016/j.neuroimage.2022.119474).
+All or portions of this licensed product (such portions are the "Software")
+have been obtained under license from The General Hospital Corporation "MGH"
+and are subject to the terms and conditions in
+[the FreeSurfer license](scripts/vendor/synthstrip/LICENSE.txt).
+See [source revision, modifications and model attribution](scripts/vendor/synthstrip/NOTICE.md).
+The separately downloaded weights use the authors' CC BY 4.0 option.
+
 The CLI also supports approximate head outlines and optional interpolation:
 
 ```bash
@@ -225,6 +276,18 @@ that the actual 3D framebuffer contains a surface:
 ```bash
 pixi run --executable ./build/pixi/gui/runGuiTests nativeSurfacePreview
 ```
+
+The optional environment also has geometry and model-integrity tests:
+
+```bash
+pixi run -e brain brain-test
+```
+
+For a local end-to-end inference check with an existing study, set
+`D2M_BRAIN_TEST_DICOM` to its directory and `D2M_BRAIN_TEST_SERIES` to the
+selected UID, then run `runGuiTests realBrainExtraction` through Pixi.
+`D2M_BRAIN_TEST_OUTPUT` optionally exports its original surface as STL.
+These variables are unset in CI; no patient data is included in fixtures.
 
 The icons in the gui were made by <a href="https://www.flaticon.com/authors/smashicons" title="Smashicons">Smashicons</a> from <a href="https://www.flaticon.com/" title="Flaticon">www.flaticon.com</a>. The license is <a href="http://creativecommons.org/licenses/by/3.0/" title="Creative Commons BY 3.0" target="_blank">CC 3.0 BY</a>
 

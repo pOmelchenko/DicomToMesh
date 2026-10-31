@@ -67,9 +67,9 @@ class D2MWidget : public QWidget {
     bool m_busy = false, m_segmentRunning = false, m_segmentPending = false, m_initializing = false,
          m_maskCurrent = false, m_processingDirty = false;
     QTimer m_debounce;
-    QPushButton *m_open, *m_load, *m_build, *m_process, *m_save, *m_undo, *m_clear;
+    QPushButton *m_open, *m_load, *m_build, *m_process, *m_save, *m_undo, *m_clear, *m_cancel;
     QComboBox *m_series, *m_mode, *m_comparison;
-    QLabel *m_details, *m_status, *m_hint, *m_meshStats;
+    QLabel *m_details, *m_status, *m_hint, *m_meshStats, *m_maskInfo;
     QProgressBar *m_progress;
     QDoubleSpinBox *m_lower, *m_upper, *m_closing, *m_windowLow, *m_windowHigh, *m_brush,
         *m_reduction, *m_isotropicSpacing;

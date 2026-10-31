@@ -274,6 +274,8 @@ VolumeHistogram volumeHistogram(vtkImageData *image) {
 vtkSmartPointer<vtkImageData> segmentVolume(vtkImageData *image,
                                             const SegmentationOptions &options) {
     validateVolume(image);
+    if (options.mode == SegmentationMode::Brain)
+        throw std::runtime_error("Brain segmentation requires the SynthStrip backend.");
     if (!std::isfinite(options.lower) || !std::isfinite(options.upper) ||
         options.lower > options.upper)
         throw std::runtime_error("The lower threshold must not exceed the upper threshold.");
@@ -311,8 +313,58 @@ vtkSmartPointer<vtkImageData> segmentVolume(vtkImageData *image,
     return result;
 }
 
+MaskSummary summarizeMask(vtkImageData *mask) {
+    validateVolume(mask);
+    if (mask->GetScalarType() != VTK_UNSIGNED_CHAR)
+        throw std::runtime_error("A binary unsigned-char mask is required.");
+    const auto *data = static_cast<unsigned char *>(mask->GetScalarPointer());
+    const int *d = mask->GetDimensions();
+    MaskSummary result;
+    for (int z = 0; z < d[2]; ++z)
+        for (int y = 0; y < d[1]; ++y)
+            for (int x = 0; x < d[0]; ++x) {
+                const auto value = data[offset(x, y, z, d)];
+                if (value > 1)
+                    throw std::runtime_error("Mask values must be zero or one.");
+                if (value) {
+                    ++result.foreground;
+                    const int c[3]{x, y, z};
+                    for (int a = 0; a < 3; ++a) {
+                        result.boundary[a * 2] += c[a] == 0;
+                        result.boundary[a * 2 + 1] += c[a] == d[a] - 1;
+                    }
+                }
+            }
+    return result;
+}
+vtkSmartPointer<vtkImageData> correctMask(vtkImageData *source,
+                                         const std::vector<MaskStroke> &strokes) {
+    summarizeMask(source);
+    const auto *data = static_cast<unsigned char *>(source->GetScalarPointer());
+    Mask mask(data, data + source->GetNumberOfPoints());
+    applyStrokes(mask, source->GetDimensions(), source->GetSpacing(), strokes);
+    auto result = vtkSmartPointer<vtkImageData>::New();
+    result->DeepCopy(source);
+    std::copy(mask.begin(), mask.end(), static_cast<unsigned char *>(result->GetScalarPointer()));
+    return result;
+}
 vtkSmartPointer<vtkPolyData> surfaceFromMask(vtkImageData *mask, double isotropicSpacing) {
     return extract(mask, 0.5, isotropicSpacing);
+}
+vtkSmartPointer<vtkPolyData> surfaceFromDistance(vtkImageData *distance, double isotropicSpacing) {
+    validateVolume(distance);
+    auto field = vtkSmartPointer<vtkImageData>::New();
+    field->CopyStructure(distance);
+    field->AllocateScalars(VTK_FLOAT, 1);
+    const auto scalars = distance->GetPointData()->GetScalars();
+    auto *values = static_cast<float *>(field->GetScalarPointer());
+    for (vtkIdType p = 0; p < distance->GetNumberOfPoints(); ++p) {
+        const double value = scalars->GetComponent(p, 0);
+        if (!std::isfinite(value))
+            throw std::runtime_error("Distance field must be finite.");
+        values[p] = float(1 - value); // positive inside, consistent outward normals
+    }
+    return extract(field, 0, isotropicSpacing);
 }
 vtkSmartPointer<vtkPolyData> intensitySurface(vtkImageData *image, double lower, bool useUpper,
                                               double upper) {

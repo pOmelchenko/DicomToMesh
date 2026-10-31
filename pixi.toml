@@ -28,3 +28,18 @@ test = { cmd = "cmake -E copy_directory ../../lib/test/data lib/test/data && ./l
 
 [target.osx.tasks]
 gui = { cmd = "./build/pixi/gui/dicom2meshgui.app/Contents/MacOS/dicom2meshgui", depends-on = ["build"], description = "Launch the macOS Qt application" }
+
+# The neural backend is optional and isolated from VTK's Python dependencies.
+[feature.brain.dependencies]
+python = "3.12.*"
+numpy = "1.26.*"
+pytorch-cpu = ">=2.2,<3"
+surfa = "0.6.3.*"
+
+[feature.brain.tasks]
+brain-setup = { cmd = "python scripts/brain_extract.py --download-model", description = "Download and verify SynthStrip no-CSF weights (29 MB)" }
+brain-test = { cmd = "python -m unittest discover -s scripts/tests -v", description = "Check brain input geometry and model integrity without inference" }
+
+[environments]
+default = { features = [], solve-group = "default" }
+brain = { features = ["brain"], no-default-feature = true }

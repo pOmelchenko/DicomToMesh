@@ -1,9 +1,11 @@
 #pragma once
 #include "dicomSeries.h"
 #include "volumeSegmentation.h"
+#include "brainExtractor.h"
 #include <QObject>
 #include <vtkImageData.h>
 #include <vtkPolyData.h>
+#include <utility>
 
 using ImagePtr = vtkSmartPointer<vtkImageData>;
 using MeshPtr = vtkSmartPointer<vtkPolyData>;
@@ -22,6 +24,12 @@ Q_DECLARE_METATYPE(MeshOptions)
 
 class DicomConverter : public QObject {
     Q_OBJECT
+  public:
+    explicit DicomConverter(BrainRuntime runtime = BrainRuntime::defaults())
+        : m_brainRuntime(std::move(runtime)) {}
+    // These two methods touch only an atomic flag and may be called by the UI.
+    void cancel() { m_cancelled.store(true); }
+    void resetCancellation() { m_cancelled.store(false); }
   public slots:
     void scan(const QString &directory);
     void load(const d2m::DicomSeries &series);
@@ -39,7 +47,10 @@ class DicomConverter : public QObject {
     void progress(int percent);
 
   private:
-    ImagePtr m_volume, m_mask;
+    ImagePtr m_volume, m_mask, m_brainMask, m_brainDistance;
     MeshPtr m_original, m_processed;
+    BrainRuntime m_brainRuntime;
+    std::atomic_bool m_cancelled{false};
+    bool m_useBrainDistance = false;
     void processMesh(const MeshOptions &options);
 };

@@ -43,7 +43,7 @@ QPushButton *button(const QString &text, const QString &name) {
     result->setObjectName(name);
     return result;
 }
-QString directionLabel(vtkImageData *image, int axis) {
+QString directionLabel(vtkImageData *image, int axis, bool increasing = true) {
     int dominant = 0;
     double largest = 0;
     for (int i = 0; i < 3; ++i)
@@ -51,7 +51,7 @@ QString directionLabel(vtkImageData *image, int axis) {
             dominant = i;
             largest = std::abs(image->GetDirectionMatrix()->GetElement(i, axis));
         }
-    const bool positive = image->GetDirectionMatrix()->GetElement(dominant, axis) > 0;
+    const bool positive = (image->GetDirectionMatrix()->GetElement(dominant, axis) > 0) == increasing;
     const char *names[3][2] = {{"R", "L"}, {"A", "P"}, {"I", "S"}};
     return names[dominant][positive ? 1 : 0];
 }
@@ -102,7 +102,7 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
     m_mode->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_mode->setMinimumContentsLength(12);
     m_mode->addItems({"Threshold · CT / manual", "Head outline · MRI, approximate",
-                      "Region from seeds · MRI / manual"});
+                      "Region from seeds · MRI / manual", "Brain · SynthStrip (local CPU)"});
     segmentation->addRow("Method", m_mode);
     m_lower = spin("lowerThreshold", -1e9, 1e9, 400);
     m_upper = spin("upperThreshold", -1e9, 1e9, 3000);
@@ -125,6 +125,12 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
     m_hint = new QLabel;
     m_hint->setWordWrap(true);
     segmentation->addRow(m_hint);
+    m_cancel = button("Cancel brain extraction", "cancelBrain");
+    segmentation->addRow(m_cancel);
+    m_maskInfo = new QLabel("No current mask.");
+    m_maskInfo->setObjectName("maskCoverage");
+    m_maskInfo->setWordWrap(true);
+    segmentation->addRow(m_maskInfo);
     m_overlay = new QCheckBox("Show mask overlay");
     m_overlay->setChecked(true);
     m_overlay->setObjectName("maskOverlay");
@@ -273,6 +279,12 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
     connect(m_series, &QComboBox::currentIndexChanged, this, &D2MWidget::selectSeries);
     connect(m_load, &QPushButton::clicked, this, &D2MWidget::loadSelected);
     connect(m_mode, &QComboBox::currentIndexChanged, this, &D2MWidget::modeChanged);
+    connect(m_cancel, &QPushButton::clicked, this, [this] {
+        m_debounce.stop();
+        m_segmentPending = false;
+        m_worker->cancel();
+        m_status->setText("Cancelling brain extraction…");
+    });
     for (auto *field : {m_lower, m_upper, m_closing})
         connect(field, &QDoubleSpinBox::valueChanged, this, [this] { requestMask(); });
     for (auto *field : {m_largest, m_fill})
@@ -374,9 +386,21 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
             return;
         }
         m_mask = mask;
-        m_maskCurrent = true;
+        const auto summary = d2m::summarizeMask(mask);
+        m_maskCurrent = summary.foreground > 0;
         for (auto *view : m_views)
             view->setMask(mask);
+        QStringList touched;
+        for (int face = 0; face < 6; ++face)
+            if (summary.boundary[face])
+                touched << QString("%1 (%2 voxels)")
+                               .arg(directionLabel(mask, face / 2, face % 2 != 0))
+                               .arg(summary.boundary[face]);
+        m_maskInfo->setText(
+            !summary.foreground ? "The mask is empty. Adjust the method or paint the target."
+            : !touched.empty() ? "Mask reaches the scan boundary: " + touched.join(", ") +
+                                     ". Check these end slices: the surface may be open or truncated."
+                               : "Mask stays inside the scan boundaries. Review its anatomical border.");
         m_status->setText(
             "Mask updated. Review the overlay in all three planes before building a surface.");
         updateActions();
@@ -410,6 +434,7 @@ D2MWidget::D2MWidget(QWidget *parent) : QWidget(parent), m_worker(new DicomConve
 }
 D2MWidget::~D2MWidget() {
     m_debounce.stop();
+    m_worker->cancel();
     m_thread.quit();
     m_thread.wait();
 }
@@ -512,6 +537,7 @@ void D2MWidget::receivedVolume(ImagePtr image, const d2m::VolumeHistogram &histo
                            .arg(directionLabel(image, axis)));
     }
     const auto &series = m_catalog.series[m_series->currentIndex()];
+    // Brain extraction is explicit: selecting it starts a potentially long inference.
     m_mode->setCurrentIndex(series.modality == "MR" ? 1 : 0);
     modeChanged();
     if (series.modality == "CT")
@@ -534,15 +560,27 @@ void D2MWidget::modeChanged() {
     const bool initializing = m_initializing;
     m_initializing = true;
     const int mode = m_mode->currentIndex();
+    const bool brain = mode == 3;
+    if (m_segmentRunning)
+        m_worker->cancel();
     m_largest->setChecked(mode == 1);
     m_fill->setChecked(mode == 1);
     m_closing->setValue(mode == 1 ? 1.0 : 0.0);
-    m_largest->setEnabled(mode != 2);
+    m_largest->setEnabled(mode != 2 && !brain);
+    m_lower->setEnabled(!brain);
+    m_upper->setEnabled(!brain);
+    m_fill->setEnabled(!brain);
+    m_closing->setEnabled(!brain);
+    findChild<QPushButton *>("autoThreshold")->setEnabled(!brain);
     m_hint->setText(
         mode == 0 ? "Intensity range only. CT thresholds are not universal for MRI."
         : mode == 1
             ? "Approximate head outline: threshold, gap closing, largest region and slice-hole "
               "filling. Check the mask; this is not automatic brain or skull extraction."
+        : brain
+            ? "SynthStrip no-CSF v1 extracts the brain locally on CPU (usually a few minutes). "
+              "Review all planes; paint corrections after extraction. Edits use the cached mask. "
+              "Model weights and the optional Pixi brain environment must be installed once."
             : "Place foreground seeds inside the target. Growth follows connected voxels within "
               "the intensity range. Erase/paint barriers to stop leakage; brain boundaries require "
               "manual review.");
@@ -573,6 +611,7 @@ void D2MWidget::requestMask() {
     for (auto *view : m_views)
         view->setMask(nullptr);
     invalidateMesh();
+    m_maskInfo->setText("Mask is being updated.");
     m_histogramView->setThresholds(m_lower->value(), m_upper->value());
     if (m_segmentRunning)
         m_segmentPending = true;
@@ -590,6 +629,11 @@ void D2MWidget::startMask() {
     }
     m_segmentRunning = true;
     m_segmentPending = false;
+    m_worker->resetCancellation();
+    if (m_mode->currentIndex() == 3) {
+        m_status->setText("Extracting brain locally with SynthStrip, or applying cached corrections…");
+        m_progress->setRange(0, 0);
+    }
     updateActions();
     emit doSegment(segmentationOptions());
 }
@@ -614,6 +658,7 @@ void D2MWidget::updateActions() {
     m_series->setEnabled(!working && !m_catalog.series.empty());
     m_load->setEnabled(!working && valid);
     m_segmentationGroup->setEnabled(!m_busy && bool(m_volume));
+    m_cancel->setEnabled(m_segmentRunning && m_mode->currentIndex() == 3);
     m_build->setEnabled(!working && m_maskCurrent);
     m_process->setEnabled(!working && bool(m_original));
     m_save->setEnabled(!working && bool(m_original) &&
@@ -667,6 +712,7 @@ void D2MWidget::fail(const QString &operation, const QString &message) {
             startMask();
             return;
         }
+        m_maskInfo->setText("No current mask. Brain extraction can be retried by selecting its method again.");
     }
     m_status->setText(message);
     updateActions();

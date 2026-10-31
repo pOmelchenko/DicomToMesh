@@ -150,3 +150,32 @@ TEST(Segmentation, RejectsInvalidOriginAndDirection) {
     image->SetDirectionMatrix(1, 1, 0, 0, 1, 0, 0, 0, 1);
     EXPECT_THROW(d2m::surfaceFromMask(image), std::runtime_error);
 }
+
+TEST(Segmentation, BrainRequiresDedicatedBackendAndCorrectionsPreserveSource) {
+    auto image = volume();
+    EXPECT_THROW(d2m::segmentVolume(image, {d2m::SegmentationMode::Brain}), std::runtime_error);
+    set(image, 4, 4, 4, 100);
+    auto mask = d2m::segmentVolume(image, {d2m::SegmentationMode::Threshold, 50, 150});
+    const auto corrected = d2m::correctMask(mask, {{{4, 4, 4}, 0.1, false}, {{0, 4, 4}, 0.1, true}});
+    EXPECT_EQ(get(mask, 4, 4, 4), 1);
+    EXPECT_EQ(get(corrected, 4, 4, 4), 0);
+    const auto summary = d2m::summarizeMask(corrected);
+    EXPECT_EQ(summary.foreground, 1);
+    EXPECT_EQ(summary.boundary[0], 1);
+    for (int f = 1; f < 6; ++f)
+        EXPECT_EQ(summary.boundary[f], 0);
+}
+TEST(Segmentation, DistanceSurfacePreservesPhysicalCoordinatesAndSource) {
+    auto image = volume();
+    image->SetOrigin(100, 200, 300);
+    image->SetSpacing(1, 2, 3);
+    for (int z = 0; z < 9; ++z)
+        for (int y = 0; y < 9; ++y)
+            for (int x = 0; x < 9; ++x)
+                set(image, x, y, z, float(std::abs(x - 4) - 1));
+    const auto mesh = d2m::surfaceFromDistance(image, 1);
+    ASSERT_GT(mesh->GetNumberOfCells(), 0);
+    EXPECT_NEAR(mesh->GetBounds()[0], 102, 1e-5);
+    EXPECT_NEAR(mesh->GetBounds()[1], 106, 1e-5);
+    EXPECT_EQ(get(image, 4, 4, 4), -1);
+}

@@ -14,20 +14,35 @@ void DicomConverter::scan(const QString &directory) {
 }
 void DicomConverter::load(const d2m::DicomSeries &series) {
     try {
-        m_volume = d2m::loadDicomSeries(series, [this](double p) { emit progress(int(p * 100)); });
+        m_volume = nullptr;
+        m_brainMask = nullptr;
+        m_brainDistance = nullptr;
+        m_useBrainDistance = false;
         m_mask = nullptr;
         m_original = nullptr;
         m_processed = nullptr;
+        m_volume = d2m::loadDicomSeries(series, [this](double p) { emit progress(int(p * 100)); });
         emit volumeReady(m_volume, d2m::volumeHistogram(m_volume));
     } catch (const std::exception &e) {
         emit failed("load", QString::fromUtf8(e.what()));
     }
 }
 void DicomConverter::segment(const d2m::SegmentationOptions &options) {
+    m_mask = nullptr;
+    m_original = nullptr;
+    m_processed = nullptr;
+    m_useBrainDistance = false;
     try {
-        m_mask = d2m::segmentVolume(m_volume, options);
-        m_original = nullptr;
-        m_processed = nullptr;
+        if (options.mode == d2m::SegmentationMode::Brain) {
+            if (!m_brainMask) {
+                const auto brain = extractBrain(m_volume, m_brainRuntime, m_cancelled);
+                m_brainMask = brain.mask;
+                m_brainDistance = brain.distance;
+            }
+            m_mask = d2m::correctMask(m_brainMask, options.strokes);
+            m_useBrainDistance = options.strokes.empty();
+        } else
+            m_mask = d2m::segmentVolume(m_volume, options);
         emit maskReady(m_mask);
     } catch (const std::exception &e) {
         emit failed("segment", QString::fromUtf8(e.what()));
@@ -53,7 +68,10 @@ void DicomConverter::processMesh(const MeshOptions &options) {
 }
 void DicomConverter::build(double spacing, const MeshOptions &options) {
     try {
-        m_original = d2m::surfaceFromMask(m_mask, spacing);
+        if (!m_mask || !d2m::summarizeMask(m_mask).foreground)
+            throw std::runtime_error("Review a non-empty mask before building a surface.");
+        m_original = m_useBrainDistance ? d2m::surfaceFromDistance(m_brainDistance, spacing)
+                                      : d2m::surfaceFromMask(m_mask, spacing);
         if (!m_original->GetNumberOfCells())
             throw std::runtime_error(
                 "The mask has no surface. Adjust the thresholds or paint the target region.");
