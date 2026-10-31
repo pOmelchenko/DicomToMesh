@@ -9,11 +9,13 @@ cmake = ">=3.24,<5"
 ninja = ">=1.11,<2"
 pkg-config = ">=0.29,<1"
 cxx-compiler = ">=1.7,<2"
-# VTK 9.2 conda-forge builds use the same Qt 5 as the GUI.
+# Keep VTK and the embedded GUI on the same Qt major version.
 # Use the complete package: VTK's CMake exports also reference vtk-io-ffmpeg.
-vtk = "9.2.*"
-qt-main = "5.15.*"
+vtk = ">=9.5,<10"
+qt6-main = ">=6.8,<7"
 gtest = "1.17.*"
+dcmtk = ">=3.6.9,<4"
+zlib = ">=1.3,<2"
 # conda-forge's VTK package includes Python bindings and their runtime.
 python = "3.12.*"
 
@@ -22,4 +24,7 @@ configure = { cmd = 'cmake -S . -B build/pixi -G Ninja -DCMAKE_BUILD_TYPE=Releas
 build = { cmd = "cmake --build build/pixi --parallel", depends-on = ["configure"], description = "Build the CLI, GUI and tests" }
 cli = { cmd = "./build/pixi/dicom2mesh/dicom2mesh", depends-on = ["build"], description = "Run the CLI; append DicomToMesh arguments" }
 gui = { cmd = "./build/pixi/gui/dicom2meshgui", depends-on = ["build"], description = "Launch the Qt GUI" }
-test = { cmd = "cmake -E copy_directory ../../lib/test/data lib/test/data && ./lib/runLibTests && ./dicom2mesh/runD2MTests", cwd = "build/pixi", depends-on = ["build"], description = "Run the library and CLI test suites in the build directory" }
+test = { cmd = "cmake -E copy_directory ../../lib/test/data lib/test/data && ./lib/runLibTests && ./dicom2mesh/runD2MTests && ./gui/runGuiTests", cwd = "build/pixi", env = { QT_QPA_PLATFORM = "offscreen" }, depends-on = ["build"], description = "Run the library, CLI and GUI tests in the build directory" }
+
+[target.osx.tasks]
+gui = { cmd = "./build/pixi/gui/dicom2meshgui.app/Contents/MacOS/dicom2meshgui", depends-on = ["build"], description = "Launch the macOS Qt application" }

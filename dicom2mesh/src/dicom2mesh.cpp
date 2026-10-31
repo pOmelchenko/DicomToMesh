@@ -27,6 +27,15 @@
 #include <fstream>
 #include <chrono>
 #include <regex>
+#include <iomanip>
+#include <cmath>
+#include <algorithm>
+#include "dicomSeries.h"
+#include "volumeSegmentation.h"
+
+using std::cerr;
+using std::cout;
+using std::endl;
 
 #include "dicom2mesh.h"
 #include "meshRoutines.h"
@@ -68,6 +77,16 @@ Dicom2Mesh::~Dicom2Mesh()
 
 int Dicom2Mesh::doMesh()
 {
+    if(m_params.listSeries) {
+        const auto catalog=d2m::scanDicomDirectory(m_params.pathToInputData.value_or(""));
+        for(const auto& series:catalog.series) {
+            std::cout << series.number << " | " << series.description << " | " << series.modality
+                      << " | " << series.slices.size() << " slices | " << series.uid << "\n";
+            if(series.usable()) std::cout << "  spacing: " << series.spacing[0] << ", " << series.spacing[1] << ", " << series.spacing[2] << " mm\n";
+            else std::cout << "  unavailable: " << series.error << "\n";
+        }
+        return 0;
+    }
     std::chrono::steady_clock::time_point t_begin = std::chrono::steady_clock::now();
 
     std::cout << std::endl << getParametersAsString(m_params) << std::endl;
@@ -202,7 +221,21 @@ std::tuple<bool, Dicom2Mesh::Dicom2MeshParameters> Dicom2Mesh::parseCmdLineParam
     {
         std::string cArg( argv[a] );
 
-        if( cArg.compare("-i") == 0 )
+        if(cArg=="--list-series") param.listSeries=true;
+        else if(cArg=="--head-outline") param.headOutline=true;
+        else if(cArg=="--series" || cArg=="--close-mm" || cArg=="--resample-mm") {
+            if(++a>=argc) {std::cerr << "Missing value for " << cArg << std::endl;return {false,param};}
+            try {
+                if(cArg=="--series")param.seriesUid=argv[a];
+                else {
+                    size_t used=0;const double value=std::stod(argv[a],&used);
+                    if(used!=std::string(argv[a]).size())return {false,param};
+                    if(!std::isfinite(value) || value<0 || (cArg=="--close-mm" && value>20) || (cArg=="--resample-mm" && value>0 && value<0.1))return {false,param};
+                    if(cArg=="--close-mm")param.closingRadiusMm=value;else param.resampleSpacing=value;
+                }
+            } catch(const std::exception&) {return {false,param};}
+        }
+        else if( cArg.compare("-i") == 0 )
         {
             // next argument is path to dicom directory
             a++;
@@ -406,6 +439,10 @@ std::tuple<bool, Dicom2Mesh::Dicom2MeshParameters> Dicom2Mesh::parseCmdLineParam
 void Dicom2Mesh::showUsageText()
 {
     std::cout << "How to use dicom2Mesh:" << std::endl << std::endl;
+    std::cout << "Inspect series: dicom2mesh -i directory --list-series\n"
+              << "Choose explicitly: dicom2mesh -i directory --series UID -t 400 -o surface.stl\n"
+              << "Approximate MRI head outline: add --head-outline -t LOWER -tu UPPER --close-mm 1\n"
+              << "Optional mask interpolation: --resample-mm 1 (does not recover missing detail).\n\n";
 
     std::cout << "Minimum example. This transforms a dicom data set into a 3d mesh file called mesh.stl by using a default iso value of 400 (shows bone)" << std::endl;
     std::cout << "> dicom2mesh -i pathToDicomDirectory -o mesh.stl" << std::endl << std::endl;
@@ -511,7 +548,12 @@ std::tuple<bool, vtkSmartPointer<vtkPolyData>, vtkSmartPointer<vtkImageData>> Di
         else
         {
             // a dicom data set
-            volume = vdr->loadDicomImage(m_params.pathToInputData.value_or(""));
+            if(m_params.seriesUid) {
+                const auto catalog=d2m::scanDicomDirectory(m_params.pathToInputData.value_or(""));
+                const auto selected=std::find_if(catalog.series.begin(),catalog.series.end(),[&](const auto& series){return series.uid==*m_params.seriesUid;});
+                if(selected==catalog.series.end())throw std::runtime_error("Requested series UID was not found. Use --list-series.");
+                volume=d2m::loadDicomSeries(*selected);
+            } else volume = vdr->loadDicomImage(m_params.pathToInputData.value_or(""));
         }
 
         if( volume == NULL )
@@ -524,7 +566,15 @@ std::tuple<bool, vtkSmartPointer<vtkPolyData>, vtkSmartPointer<vtkImageData>> Di
             if( m_params.enableCrop )
                 vdr->cropDicom( volume );
 
-            mesh3d = vdr->dicomToMesh( volume, m_params.isoValue, m_params.upperIsoValue.has_value(), m_params.upperIsoValue.value_or(0) );
+            if(m_params.headOutline || m_params.resampleSpacing>0) {
+                d2m::SegmentationOptions options;
+                options.mode=m_params.headOutline?d2m::SegmentationMode::HeadOutline:d2m::SegmentationMode::Threshold;
+                options.lower=m_params.isoValue;
+                options.upper=m_params.upperIsoValue?double(*m_params.upperIsoValue):volume->GetScalarRange()[1];
+                options.largestComponent=m_params.headOutline;options.fillSliceHoles=m_params.headOutline;
+                options.closingRadiusMm=m_params.headOutline?m_params.closingRadiusMm:0;
+                mesh3d=d2m::surfaceFromMask(d2m::segmentVolume(volume,options),m_params.resampleSpacing);
+            } else mesh3d = vdr->dicomToMesh( volume, m_params.isoValue, m_params.upperIsoValue.has_value(), m_params.upperIsoValue.value_or(0) );
             result = true;
         }
     }
@@ -535,6 +585,10 @@ std::tuple<bool, vtkSmartPointer<vtkPolyData>, vtkSmartPointer<vtkImageData>> Di
 std::string Dicom2Mesh::getParametersAsString(const Dicom2MeshParameters& params) const
 {
     std::string ret = "Dicom2Mesh Settings\n-------------------\n";
+    ret.append("Series UID: "+params.seriesUid.value_or("automatic only for a single valid series")+"\n");
+    ret.append(std::string("Segmentation: ")+(params.headOutline?"approximate head outline":"intensity threshold")+"\n");
+    ret.append("Closing radius (mm): "+std::to_string(params.closingRadiusMm)+"\n");
+    ret.append("Mask interpolation (mm, 0=off): "+std::to_string(params.resampleSpacing)+"\n");
     ret.append("Input directory: "); ret.append(params.pathToInputData.value_or("None")); ret.append("\n");
     ret.append("Output file path: "); ret.append(params.outputFilePath.value_or("None")); ret.append("\n");
 

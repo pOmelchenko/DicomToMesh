@@ -40,6 +40,11 @@ public:
     struct Dicom2MeshParameters
     {
         std::optional<std::string> pathToInputData;
+        std::optional<std::string> seriesUid;
+        bool listSeries = false;
+        bool headOutline = false;
+        double closingRadiusMm = 1.0;
+        double resampleSpacing = 0.0;
         std::optional<std::vector<std::string>> inputImageFiles;
         std::vector<double> xyzSpacing = {1.0, 1.0, 1.0};
         bool enableCrop = false;

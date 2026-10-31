@@ -23,23 +23,20 @@
 
 
 #include <QApplication>
+#include <QSurfaceFormat>
+#include <QTimer>
+#include <QVTKOpenGLNativeWidget.h>
 #include <QSplashScreen>
 #include <QThread>
 #include "d2mWidget.h"
 
 int main(int argc, char *argv[])
 {
+    QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
     QApplication a(argc, argv);
 
-    QPixmap pixmap(":/img/aot.jpg");
-    QSplashScreen splash(pixmap);
-    splash.show();
-
     D2MWidget w;
-
-    QThread::msleep(1500);
-
     w.show();
-    splash.finish(&w);
+    if(argc==2)QTimer::singleShot(0,&w,[&w,path=QString::fromLocal8Bit(argv[1])]{w.openDirectory(path);});
     return a.exec();
 }

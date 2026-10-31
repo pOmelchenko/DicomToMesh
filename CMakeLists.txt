@@ -2,25 +2,21 @@
 
 project( d2m )
 
-option(USE_VTK_DICOM "Use VTK-DICOM Lib (extended DICOM support)" OFF)
+find_package(DCMTK CONFIG REQUIRED)
+
+option(USE_VTK_DICOM "Deprecated: validated DCMTK loading is always enabled" OFF)
+if(USE_VTK_DICOM)
+    message(DEPRECATION "USE_VTK_DICOM is obsolete. Both GUI and CLI now use the validated DCMTK loader.")
+endif()
 
 # Request only the modules used by DicomToMesh. Loading every VTK module
-# also requires unrelated SDKs (Python, Boost, databases, etc.). Keep the
-# original discovery path for legacy VTK and optional vtk-dicom builds.
-if(NOT USE_VTK_DICOM)
-    find_package(VTK 9 QUIET COMPONENTS
-        CommonCore CommonDataModel CommonExecutionModel CommonMath CommonTransforms
-        FiltersCore FiltersGeneral FiltersSources ImagingCore
-        IOGeometry IOImage IOPLY InteractionStyle
-        RenderingCore RenderingOpenGL2 RenderingVolume RenderingVolumeOpenGL2
-    )
-endif()
-if(USE_VTK_DICOM OR NOT VTK_FOUND)
-    find_package(VTK REQUIRED)
-endif()
-if(VTK_MAJOR_VERSION LESS 9)
-    include(${VTK_USE_FILE})
-endif()
+# also requires unrelated SDKs (Python, Boost, databases, etc.).
+find_package(VTK 9 REQUIRED COMPONENTS
+    CommonCore CommonDataModel CommonExecutionModel CommonMath CommonTransforms
+    FiltersCore FiltersGeneral FiltersSources ImagingCore
+    IOGeometry IOImage IOPLY InteractionStyle
+    RenderingCore RenderingOpenGL2 RenderingVolume RenderingVolumeOpenGL2
+)
 
 option(GCOV "COVERAGE" OFF)
 IF(GCOV)

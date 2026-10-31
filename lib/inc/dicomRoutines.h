@@ -46,11 +46,13 @@ public:
 
     /**
      * Loads the DICOM images within a directory.
-     * If there are multiple DICOM sets, user interaction is needed.
+     * Loads automatically only when exactly one valid 3D series is present.
+     * Multiple valid series require explicit selection through dicomSeries.h.
      * @param pathToDicom Path to the DICOM directory.
      * @return DICOM image data.
      */
     virtual vtkSmartPointer<vtkImageData> loadDicomImage( const std::string& pathToDicom );
+    const std::string& lastError() const { return m_error; }
 
     /**
      * Load image data from a set of png images.
@@ -89,6 +91,7 @@ private:
 protected:
 
     vtkSmartPointer<vtkCallbackCommand> m_progressCallback;
+    std::string m_error;
 };
 
 #endif // _vtkDicomRoutines_H_

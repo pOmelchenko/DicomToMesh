@@ -24,19 +24,10 @@
 #include "dicomFactory.h"
 #include "dicomRoutines.h"
 
-#ifdef USEVTKDICOM
-#include "dicomRoutinesExtended.h"
-#endif
-
 #include <iostream>
 
 std::shared_ptr<VTKDicomRoutines> VTKDicomFactory::getDicomRoutines()
 {
-#ifdef USEVTKDICOM
-    std::cout << "Using extended DICOM loader" << std::endl;
-    return std::shared_ptr<VTKDicomRoutines>( new VTKDicomRoutinesExtended() );
-#else
-    std::cout << "Using standard DICOM loader" << std::endl;
+    std::cout << "Using validated DICOM loader (DCMTK)" << std::endl;
     return std::shared_ptr<VTKDicomRoutines>( new VTKDicomRoutines() );
-#endif
 }

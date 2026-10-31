@@ -1,82 +1,45 @@
-/****************************************************************************
-** Copyright (c) 2017 Adrian Schneider, https://github.com/eidelen
-**
-** Permission is hereby granted, free of charge, to any person obtaining a
-** copy of this software and associated documentation files (the "Software"),
-** to deal in the Software without restriction, including without limitation
-** the rights to use, copy, modify, merge, publish, distribute, sublicense,
-** and/or sell copies of the Software, and to permit persons to whom the
-** Software is furnished to do so, subject to the following conditions:
-**
-** The above copyright notice and this permission notice shall be included in
-** all copies or substantial portions of the Software.
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-** IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-** FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-** AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-** LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-** FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-** DEALINGS IN THE SOFTWARE.
-**
-*****************************************************************************/
-
-
-#ifndef QDICOM_CONVERTER_H
-#define QDICOM_CONVERTER_H
-
-#include "dicomRoutines.h"
-#include "meshRoutines.h"
-#include "meshData.h"
-
-#include <vtkSmartPointer.h>
-#include <vtkPolyData.h>
-#include <vtkCallbackCommand.h>
-
+#pragma once
+#include "dicomSeries.h"
+#include "volumeSegmentation.h"
 #include <QObject>
+#include <vtkImageData.h>
+#include <vtkPolyData.h>
 
-#include <memory>
-
-class DicomConverter_Listener
-{
-public:
-    virtual void converterProgress(double progress) = 0;
+using ImagePtr = vtkSmartPointer<vtkImageData>;
+using MeshPtr = vtkSmartPointer<vtkPolyData>;
+struct MeshOptions {
+    double reduction = 0;
+    int smoothingIterations = 0;
+    bool center = false;
 };
+Q_DECLARE_METATYPE(d2m::DicomCatalog)
+Q_DECLARE_METATYPE(d2m::DicomSeries)
+Q_DECLARE_METATYPE(d2m::SegmentationOptions)
+Q_DECLARE_METATYPE(d2m::VolumeHistogram)
+Q_DECLARE_METATYPE(ImagePtr)
+Q_DECLARE_METATYPE(MeshPtr)
+Q_DECLARE_METATYPE(MeshOptions)
 
-class DicomConverter : public QObject
-{
-Q_OBJECT
+class DicomConverter : public QObject {
+    Q_OBJECT
+  public slots:
+    void scan(const QString &directory);
+    void load(const d2m::DicomSeries &series);
+    void segment(const d2m::SegmentationOptions &options);
+    void build(double isotropicSpacing, const MeshOptions &options);
+    void process(const MeshOptions &options);
+    void save(const QString &path, bool original);
+  signals:
+    void catalogReady(const d2m::DicomCatalog &catalog);
+    void volumeReady(ImagePtr image, const d2m::VolumeHistogram &histogram);
+    void maskReady(ImagePtr mask);
+    void meshReady(MeshPtr original, MeshPtr processed);
+    void saved(const QString &path);
+    void failed(const QString &operation, const QString &message);
+    void progress(int percent);
 
-public:
-    DicomConverter(DicomConverter_Listener* host);
-
-    static void progressCallback(vtkObject* caller, long unsigned int eventId, void* clientData, void* callData);
-
-    vtkSmartPointer<vtkPolyData> getMesh();
-
-public slots:
-    void loadDicomImage( const QString& pathToDicom, int threshold );
-    void centerMesh();
-    void reduction(double reductionRate);
-    void filtering(double filterRate);
-    void smoothing();
-    void exportMesh(const QString& meshPath);
-
-signals:
-    void loadDicomImage_Done(bool ok);
-    void centerMesh_Done(bool ok);
-    void reduction_Done(bool ok);
-    void filtering_Done(bool ok);
-    void smoothing_Done(bool ok);
-    void export_Done(bool ok);
-
-private:
-    DicomConverter_Listener* m_host;
-    vtkSmartPointer<vtkCallbackCommand> m_progressCB;
-    vtkSmartPointer<vtkPolyData> m_mesh;
-    std::shared_ptr<VTKDicomRoutines> m_vdr;
-    std::shared_ptr<VTKMeshRoutines> m_vmr;
-    std::shared_ptr<VTKMeshData> m_vmd;
+  private:
+    ImagePtr m_volume, m_mask;
+    MeshPtr m_original, m_processed;
+    void processMesh(const MeshOptions &options);
 };
-
-#endif // QDICOM_CONVERTER_H

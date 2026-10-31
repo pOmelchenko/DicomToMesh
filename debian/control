@@ -2,7 +2,7 @@ Source: dicom2mesh
 Section: devel
 Priority: optional
 Maintainer: Adrian Schneider <adrian.schneider.pr@gmail.com>
-Build-Depends: debhelper-compat (= 13), cmake, build-essential, libvtk9-dev, qtbase5-dev, libqt5opengl5-dev, default-jdk
+Build-Depends: debhelper-compat (= 13), cmake, build-essential, libvtk9-dev, libdcmtk-dev, default-jdk
 Homepage: https://github.com/eidelen/DicomToMesh
 
 Package: dicom2mesh

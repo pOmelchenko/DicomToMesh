@@ -22,14 +22,18 @@
 *****************************************************************************/
 
 #include <memory>
+#include <iostream>
 #include "dicom2mesh.h"
 
 int main(int argc, char *argv[])
 {
+    try {
+    if(argc==2 && std::string(argv[1])=="-h"){Dicom2Mesh::showUsageText();return 0;}
     auto[parseOk, settings] = Dicom2Mesh::parseCmdLineParameters(argc, (const char**)( argv ));
     if( !parseOk )
         return -1;
 
     auto d2m = std::shared_ptr<Dicom2Mesh>(new Dicom2Mesh(settings));
     return d2m->doMesh();
+    } catch(const std::exception& error) {std::cerr << "DicomToMesh: " << error.what() << std::endl;return 1;}
 }

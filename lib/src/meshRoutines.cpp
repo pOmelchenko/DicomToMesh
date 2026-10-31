@@ -25,7 +25,7 @@
 
 #include <vtkCenterOfMass.h>
 #include <vtkTransform.h>
-#include <vtkTransformPolyDataFilter.h>
+#include <vtkTransformFilter.h>
 #include <vtkQuadricDecimation.h>
 #include <vtkPolyDataConnectivityFilter.h>
 #include <vtkSmoothPolyDataFilter.h>
@@ -68,7 +68,7 @@ vtkVector3d VTKMeshRoutines::moveMeshToCOSCenter( vtkSmartPointer<vtkPolyData> m
     vtkSmartPointer<vtkTransform> translation = vtkSmartPointer<vtkTransform>::New();
     translation->Translate(-objectCenter[0], -objectCenter[1], -objectCenter[2]);
 
-    vtkSmartPointer<vtkTransformPolyDataFilter> transformFilter = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+    vtkSmartPointer<vtkTransformFilter> transformFilter = vtkSmartPointer<vtkTransformFilter>::New();
     transformFilter->SetInputData( mesh );
     transformFilter->SetTransform( translation );
     transformFilter->Update();

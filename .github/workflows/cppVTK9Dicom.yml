@@ -1,32 +1,26 @@
-name: VTK9 C++ CI
+name: Pixi build and tests
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v1
-    - name: Install packages 
-      run: sudo apt-get update && sudo apt-get install -y build-essential cmake libglvnd-dev libproj-dev libvtk9-dev libvtk9-qt-dev 
-    - name: Check installed versions
-      run: cmake --version 
-    - name: Configure Simple
-      run:  mkdir build && cd build && cmake -DTESTDICOM2MESH=ON -DTESTDICOM2MESHLIB=ON -DBUILD_GUI=OFF -DUSE_VTK_DICOM=OFF ..
-    - name: Build D2M Simple
-      run: cd build && make
-    - name: Run Test Simple
-      run: ./build/lib/runLibTests && ./build/dicom2mesh/runD2MTests
-    - name: Run Smoke Test Dicom2Mesh
-      run: |
-          if ./build/dicom2mesh/dicom2mesh -h | grep -q "How to use dicom2Mesh:"; then
-              echo "Smoke test passed: Application started successfully."
-          else
-              echo "Smoke test failed: Expected output not found."
-              exit 1
-          fi
-
-    - name: Clean
-      run: rm -rf build
-
-
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.11.2
+        with:
+          pixi-version: v0.71.1
+          cache: true
+      - name: Verify locked dependencies
+        run: pixi install --locked
+      - name: Build and run synthetic DICOM, segmentation, CLI and GUI tests
+        run: pixi run --locked test
+      - name: CLI smoke test
+        run: pixi run --locked --skip-deps cli -h

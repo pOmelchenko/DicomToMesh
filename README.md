@@ -1,4 +1,4 @@
-![VTK9 + Dicom build status](https://github.com/eidelen/DicomToMesh/actions/workflows/cppVTK9Dicom.yml/badge.svg) ![GUI Qt5 build status](https://github.com/eidelen/DicomToMesh/actions/workflows/cppVTK9DicomGUI.yml/badge.svg) ![PPA Installations Ubuntu status](https://github.com/eidelen/DicomToMesh/actions/workflows/ppaUbuntuLatest.yml/badge.svg) 
+![Pixi build and tests](https://github.com/pOmelchenko/DicomToMesh/actions/workflows/cppVTK9Dicom.yml/badge.svg) ![Qt 6 native OpenGL preview](https://github.com/pOmelchenko/DicomToMesh/actions/workflows/cppVTK9DicomGUI.yml/badge.svg)
 
 # DicomToMesh
 
@@ -79,61 +79,74 @@ pixi run test
 pixi run gui
 ```
 
-Pixi installs CMake, Ninja, pkg-config, a C++ compiler, VTK, Qt 5 and GoogleTest from
+Pixi installs CMake, Ninja, pkg-config, a C++ compiler, DCMTK, VTK, Qt 6 and GoogleTest from
 conda-forge. The committed `pixi.lock` records the exact packages for Apple
 Silicon macOS, Intel macOS and x86-64 Linux (macOS 13+ or Linux with glibc
 2.28+). On macOS, Apple's Xcode Command Line Tools (or Xcode) must also be
 installed to provide the system SDK.
 
-The environment pins VTK 9.2 and Qt 5 so the GUI and VTK use the same Qt
-version. Extended `vtk-dicom` support is disabled (`USE_VTK_DICOM=OFF`).
+The environment uses VTK 9.5+ and Qt 6 together. Both the CLI and GUI use
+DCMTK to inspect and decode DICOM, with the same geometry validation.
+`USE_VTK_DICOM` is obsolete; enabling it no longer selects the old interactive loader.
 
-The build includes the CLI, GUI and both existing test suites. CMake finds
+The build includes the CLI, GUI and library, CLI and Qt GUI test suites. CMake finds
 GoogleTest in the Pixi environment instead of downloading it. Build files
 are kept in `build/pixi/`; binaries should be run through Pixi so their
 runtime dependencies and Qt plugins are available. `gui`, `cli` and `test`
 automatically configure and build the project before running. Tests copy
 their fixtures into the build directory and keep generated files there.
+On macOS the GUI is built as `build/pixi/gui/dicom2meshgui.app`.
 
 ```bash
 pixi run cli -h
-pixi run cli -i /path/to/dicom -t 557 -o mesh.stl
+pixi run cli -i /path/to/dicom --list-series
+pixi run cli -i /path/to/dicom --series SERIES_UID -t 557 -o mesh.stl
+```
+
+For paths containing apostrophes, Pixi 0.71 task argument quoting can fail.
+After `pixi run build`, bypass its task shell and pass the arguments directly:
+
+```bash
+pixi run --executable ./build/pixi/dicom2mesh/dicom2mesh -i "/path/with an apostrophe's/DICOM" --list-series
 ```
 
 ## Building with system dependencies
 
-Building DicomToMesh on Linux and OSX:
-```
-> git clone https://github.com/AOT-AG/DicomToMesh.git
-> cd DicomToMesh
-> mkdir build
-> cd build
-> ccmake ..  #opens ccmake window
-```
-Within the ccmake window, pass the path to your vtk installation or vtk build directory. In my case, it looks like that
-```
-BUILD_GUI                        OFF
-CMAKE_BUILD_TYPE                 DEBUG
-CMAKE_INSTALL_PREFIX             /usr/local                                   
-USE_VTK_DICOM                    OFF                                          
-VTK_DIR                          /home/eidelen/Development/libs/vtk/build     
-```
-Press <code>c</code> and then <code>g</code>. 
-Now you are back in terminal and ready to build.
-```
-> make
-```
-In order to extend the supported DICOM formats, the library vtk-dicom <code>USE_VTK_DICOM</code> can be optionally enabled (see https://github.com/dgobbi/vtk-dicom). If you use VTK 6, 7 or 8, you have to build vtk-dicom separately. From on VTK 9, vtk-dicom is part of the vtk project - you can enable the corresponding module when building VTK with
-```
-> cmake .. -DVTK_MODULE_ENABLE_VTK_DICOM=YES -DVTK_MODULE_ENABLE_VTK_vtkDICOM=YES
+Install CMake 3.24+, a C++17 compiler, VTK 9 and DCMTK with CMake package
+configuration files. The GUI additionally requires Qt 6 and a VTK build
+whose `GUISupportQt` module uses Qt 6. The Pixi lock file provides a tested
+combination; arbitrary system VTK/Qt builds may use different Qt versions.
+
+```bash
+cmake -S . -B build/system -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=ON
+cmake --build build/system --parallel
 ```
 
-Building on Windows:
+Set `CMAKE_PREFIX_PATH` or `VTK_DIR`, `DCMTK_DIR` and `Qt6_DIR` when the
+dependencies are outside the default search paths. Set `BUILD_GUI=OFF`
+for the CLI alone. The managed Pixi workflow targets macOS and Linux;
+Windows packaging is not covered by its lock file.
 
-Building on Windows is essentially the same as building under Linux and OSX. The project settings can be done with the cmake GUI. The versions we are using are VTK 7.0.0 together with Visual Studio 2015. The optional GUI we are building with QT 5.9.4. 
+## DICOM import and geometry
 
-Additional build notes:
-- <a href="https://github.com/AOT-AG/DicomToMesh/issues/14#issuecomment-443224034" title="Smashicons">Building on OSX with vtk-dicom (Moritz Moeller)</a>
+The directory is scanned recursively and grouped by Series Instance UID.
+Opening a mixed folder never silently chooses its first series. The GUI
+lists every series and explains why a localizer, report or inconsistent
+acquisition is unavailable. The CLI loads automatically only when there
+is exactly one valid 3D series; otherwise use `--list-series` and `--series`.
+
+Slices are sorted by Image Position Patient projected onto the normal
+from Image Orientation Patient. Pixel spacing, physical origin and LPS
+orientation are preserved in the volume and exported surface. Zero or
+irregular spacing, inconsistent dimensions/orientation, repeated positions
+and sheared stacks are rejected with an explanation. A repeated-position
+diffusion or time series must first be separated into individual volumes.
+
+Single-frame monochrome 8/16-bit integer images are supported, including
+signed stored bits, pixel rescale and the DCMTK JPEG, JPEG-LS and RLE
+decoders. Enhanced multi-frame images, RGB reports and JPEG 2000 require
+an appropriate external conversion. There is a 256-million-voxel volume
+limit and a 128-million-voxel interpolation limit to bound memory use.
 
 # How to use Dicom2Mesh
 
@@ -153,14 +166,65 @@ Alternatively, one can use an existing 3d mesh as input. This is useful if you w
 
 # GUI
 
-Dicom2Mesh can be built with a small GUI on top.
-This showed up to be helpful for users without command line experience.
-However, the control possibilities are limited compared to the command line version.
+Run `pixi run gui`, open a DICOM folder, choose an anatomical series and
+click **Load selected series**. Inspect the three orthogonal image planes.
+They keep the physical pixel aspect ratio; labels indicate the positive
+image-axis directions in DICOM LPS coordinates. These are acquisition-axis
+views, not a resliced anatomical atlas. Brightness/window controls affect
+display only. A sampled histogram and Otsu suggestion help choose an
+intensity range; the green overlay shows the actual segmentation mask.
 
-<p align="center"><img alt="dicom2mesh_gui" src="docs/img/dicomtomesh_gui2.png" width="75%"></p>
+Three methods are available:
 
-In order to build the Dicom2Mesh GUI, please set the cmake flag <code>BUILD_GUI=ON</code> when configuring the project.
-The GUI requires QT.
+- **Threshold:** an intensity range for CT or manual selection. A CT bone
+  threshold is not a universal MRI threshold.
+- **Head outline:** an approximate MRI outline with configurable gap
+  closing in millimetres, largest-region selection and hole filling in
+  acquisition slices. It does not automatically isolate brain or skull.
+- **Region from seeds:** connected growth within the intensity range from
+  manually painted foreground seeds. Right-button erasing can create
+  barriers against leakage. This provides a manual-assisted tool for
+  selecting a region such as brain tissue; all boundaries need review.
+
+Enable **Paint corrections / place seeds** to add with the left mouse
+button and erase with the right mouse button in any plane. Brush size is
+in millimetres; strokes can be undone or cleared. Corrections take
+precedence over automatic hole filling. Masks and edits remain in the
+current session; export the surface before loading another series.
+
+Click **Build surface** after reviewing the mask. The 3D view is embedded
+in the application. Optional interpolation reduces stair steps but does
+not recover anatomical detail between thick slices. Smoothing, polygon
+reduction and centering are disabled by default. **Apply processing**
+always starts from a copy of the original surface. Switch **View / export**
+between original and processed to compare triangle counts and geometry,
+then export the visible version as STL, OBJ or PLY. Changing the mask
+invalidates the old surface so it cannot be exported accidentally.
+
+Surface extraction follows the selected mask inside the scanned field of
+view. A region cut by a scan boundary can produce an open surface; this
+workflow does not invent missing anatomy or automatically repair it for
+printing. Coarse MRI with thick/gapped slices yields only an approximate
+surface, regardless of interpolation or smoothing.
+
+The CLI also supports approximate head outlines and optional interpolation:
+
+```bash
+pixi run cli -i /path/to/dicom --series SERIES_UID --head-outline \
+  -t LOWER_INTENSITY -tu UPPER_INTENSITY --close-mm 1 --resample-mm 1 -o head.stl
+```
+
+## Verification
+
+`pixi run test` runs synthetic DICOM geometry/decoding tests, segmentation
+and coordinate tests, the existing mesh/CLI tests and headless Qt workflow
+tests. Fixtures are generated at runtime and contain no patient data.
+On a machine with a display, the native OpenGL check additionally verifies
+that the actual 3D framebuffer contains a surface:
+
+```bash
+pixi run --executable ./build/pixi/gui/runGuiTests nativeSurfacePreview
+```
 
 The icons in the gui were made by <a href="https://www.flaticon.com/authors/smashicons" title="Smashicons">Smashicons</a> from <a href="https://www.flaticon.com/" title="Flaticon">www.flaticon.com</a>. The license is <a href="http://creativecommons.org/licenses/by/3.0/" title="Creative Commons BY 3.0" target="_blank">CC 3.0 BY</a>
 

@@ -1,88 +1,87 @@
-/****************************************************************************
-** Copyright (c) 2017 Adrian Schneider, https://github.com/eidelen
-**
-** Permission is hereby granted, free of charge, to any person obtaining a
-** copy of this software and associated documentation files (the "Software"),
-** to deal in the Software without restriction, including without limitation
-** the rights to use, copy, modify, merge, publish, distribute, sublicense,
-** and/or sell copies of the Software, and to permit persons to whom the
-** Software is furnished to do so, subject to the following conditions:
-**
-** The above copyright notice and this permission notice shall be included in
-** all copies or substantial portions of the Software.
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-** IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-** FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-** AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-** LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-** FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-** DEALINGS IN THE SOFTWARE.
-**
-*****************************************************************************/
-
-
-#ifndef WIDGET_H
-#define WIDGET_H
-
+#pragma once
 #include "dicomConverter.h"
-
-#include <vtkCallbackCommand.h>
-#include <QWidget>
 #include <QThread>
+#include <QTimer>
+#include <QWidget>
 
+class QComboBox;
+class QDoubleSpinBox;
+class QSpinBox;
+class QCheckBox;
+class QLabel;
+class QPushButton;
+class QProgressBar;
+class QSlider;
+class QTabWidget;
+class QGroupBox;
+class QVTKOpenGLNativeWidget;
+class vtkRenderer;
+class vtkPolyDataMapper;
+class vtkActor;
+class SliceView;
+class HistogramView;
 
-namespace Ui {
-    class D2MWidget;
-}
- 
-class D2MWidget : public QWidget, public DicomConverter_Listener
-{
+class D2MWidget : public QWidget {
     Q_OBJECT
- 
-public:
-    explicit D2MWidget(QWidget *parent = 0);
-    ~D2MWidget();
+  public:
+    explicit D2MWidget(QWidget *parent = nullptr);
+    ~D2MWidget() override;
+  public slots:
+    void openDirectory(const QString &directory);
+  signals:
+    void doScan(const QString &directory);
+    void doLoad(const d2m::DicomSeries &series);
+    void doSegment(const d2m::SegmentationOptions &options);
+    void doBuild(double spacing, const MeshOptions &options);
+    void doProcess(const MeshOptions &options);
+    void doSave(const QString &path, bool original);
+    void seriesListed(int count);
+    void volumeLoaded();
+    void maskUpdated();
 
-    // from DicomConverter_Listener
-    void converterProgress(double progress);
+  private:
+    void selectSeries();
+    void loadSelected();
+    void receivedVolume(ImagePtr image, const d2m::VolumeHistogram &histogram);
+    void requestMask();
+    void startMask();
+    void modeChanged();
+    void updateActions();
+    void setBusy(const QString &message);
+    void invalidateMesh();
+    void updateWindow();
+    void showMesh(bool resetCamera = true);
+    MeshOptions meshOptions() const;
+    d2m::SegmentationOptions segmentationOptions() const;
+    void applyProcessing();
+    void saveModel();
+    void fail(const QString &operation, const QString &message);
 
-public slots:
-    void openDicomBtn();
-    void saveBtn();
-    void runBtn();
-    void updateProgress(double progress);
-
-    void load_done(bool ok);
-    void center_done(bool ok);
-    void reduction_done(bool ok);
-    void filter_done(bool ok);
-    void smoothing_done(bool ok);
-    void export_done(bool ok);
-
-signals:
-    void doLoad(const QString& pathToDicom, int threshold);
-    void doCenter();
-    void doReduction(double reductionRate);
-    void doFilter(double filterRate);
-    void doSmoothing();
-    void doExport(const QString& path);
-
-    void doUpdateProgress(double progress);
-
-private:
-    void handleStartConversion();
-    void handleEndConversion();
-
-private:
-    Ui::D2MWidget *ui;
-
-    QString m_dicom_path;
-    QString m_mesh_path;
-    vtkSmartPointer<vtkCallbackCommand> m_progressCB;
-    QThread m_conversionThread;
-    DicomConverter* m_converter;
+    QThread m_thread;
+    DicomConverter *m_worker;
+    d2m::DicomCatalog m_catalog;
+    d2m::VolumeHistogram m_histogram;
+    std::vector<d2m::MaskStroke> m_strokes;
+    ImagePtr m_volume, m_mask;
+    MeshPtr m_original, m_processed;
+    bool m_busy = false, m_segmentRunning = false, m_segmentPending = false, m_initializing = false,
+         m_maskCurrent = false, m_processingDirty = false;
+    QTimer m_debounce;
+    QPushButton *m_open, *m_load, *m_build, *m_process, *m_save, *m_undo, *m_clear;
+    QComboBox *m_series, *m_mode, *m_comparison;
+    QLabel *m_details, *m_status, *m_hint, *m_meshStats;
+    QProgressBar *m_progress;
+    QDoubleSpinBox *m_lower, *m_upper, *m_closing, *m_windowLow, *m_windowHigh, *m_brush,
+        *m_reduction, *m_isotropicSpacing;
+    QSpinBox *m_smoothing;
+    QCheckBox *m_largest, *m_fill, *m_overlay, *m_edit, *m_center, *m_isotropic;
+    QGroupBox *m_segmentationGroup;
+    QTabWidget *m_tabs;
+    SliceView *m_views[3];
+    QSlider *m_sliders[3];
+    HistogramView *m_histogramView;
+    QVTKOpenGLNativeWidget *m_meshView;
+    vtkSmartPointer<vtkRenderer> m_renderer;
+    vtkSmartPointer<vtkPolyDataMapper> m_mapper;
+    vtkSmartPointer<vtkActor> m_actor;
 };
-
- 
-#endif // WIDGET_H

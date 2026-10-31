@@ -1,180 +1,95 @@
-/****************************************************************************
-** Copyright (c) 2017 Adrian Schneider, https://github.com/eidelen
-**
-** Permission is hereby granted, free of charge, to any person obtaining a
-** copy of this software and associated documentation files (the "Software"),
-** to deal in the Software without restriction, including without limitation
-** the rights to use, copy, modify, merge, publish, distribute, sublicense,
-** and/or sell copies of the Software, and to permit persons to whom the
-** Software is furnished to do so, subject to the following conditions:
-**
-** The above copyright notice and this permission notice shall be included in
-** all copies or substantial portions of the Software.
-**
-** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-** IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-** FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-** AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-** LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-** FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-** DEALINGS IN THE SOFTWARE.
-**
-*****************************************************************************/
-
 #include "dicomConverter.h"
+#include "meshData.h"
+#include "meshRoutines.h"
+#include <QFileInfo>
+#include <filesystem>
+#include <stdexcept>
 
-#include "dicomFactory.h"
-
-#include <vtkAlgorithm.h>
-#include <string>
-
-DicomConverter::DicomConverter(DicomConverter_Listener* host)
-{
-    m_host = host;
-
-    m_progressCB = vtkSmartPointer<vtkCallbackCommand>::New();
-    m_progressCB->SetCallback(progressCallback);
-    m_progressCB->SetClientData(static_cast<void*>(m_host));
-
-    m_vdr = VTKDicomFactory::getDicomRoutines();
-    m_vdr->SetProgressCallback( m_progressCB );
-
-    m_vmr = std::shared_ptr<VTKMeshRoutines>( new VTKMeshRoutines() );
-    m_vmr->SetProgressCallback( m_progressCB );
-
-    m_vmd = std::shared_ptr<VTKMeshData>( new VTKMeshData() );
-    m_vmd->SetProgressCallback( m_progressCB );
-}
-
-void DicomConverter::progressCallback(vtkObject* caller, long unsigned int /*eventId*/, void* clientData, void* /*callData*/)
-{
-    // display progress in terminal
-    vtkAlgorithm* filter = static_cast<vtkAlgorithm*>(caller);
-
-    DicomConverter_Listener* host = static_cast<DicomConverter_Listener*>(clientData);
-    host->converterProgress( filter->GetProgress() * 100);
-}
-
-
-void DicomConverter::loadDicomImage( const QString& pathToDicom, int threshold )
-{
-    bool ret;
-
-    std::cout << "loadDicomImage" << std::endl;
-
-    vtkSmartPointer<vtkImageData> imgData = m_vdr->loadDicomImage( pathToDicom.toStdString() );
-    if( imgData == NULL )
-    {
-        std::cerr << "No DICOM data could be found in the directory" << endl;
-        ret = false;
+void DicomConverter::scan(const QString &directory) {
+    try {
+        emit catalogReady(d2m::scanDicomDirectory(directory.toStdString()));
+    } catch (const std::exception &e) {
+        emit failed("scan", QString::fromUtf8(e.what()));
     }
-    else
-    {
-        m_mesh = m_vdr->dicomToMesh( imgData, threshold, false, 0);
-
-        if( m_mesh->GetNumberOfCells() == 0 )
-        {
-            std::cerr << "No mesh could be created. Wrong DICOM or wrong iso value" << endl;
-            ret = false;
-        }
+}
+void DicomConverter::load(const d2m::DicomSeries &series) {
+    try {
+        m_volume = d2m::loadDicomSeries(series, [this](double p) { emit progress(int(p * 100)); });
+        m_mask = nullptr;
+        m_original = nullptr;
+        m_processed = nullptr;
+        emit volumeReady(m_volume, d2m::volumeHistogram(m_volume));
+    } catch (const std::exception &e) {
+        emit failed("load", QString::fromUtf8(e.what()));
+    }
+}
+void DicomConverter::segment(const d2m::SegmentationOptions &options) {
+    try {
+        m_mask = d2m::segmentVolume(m_volume, options);
+        m_original = nullptr;
+        m_processed = nullptr;
+        emit maskReady(m_mask);
+    } catch (const std::exception &e) {
+        emit failed("segment", QString::fromUtf8(e.what()));
+    }
+}
+void DicomConverter::processMesh(const MeshOptions &options) {
+    if (!m_original || !m_original->GetNumberOfCells())
+        throw std::runtime_error("Build a non-empty surface first.");
+    if (options.reduction < 0 || options.reduction > 0.95 || options.smoothingIterations < 0 ||
+        options.smoothingIterations > 100)
+        throw std::runtime_error("Invalid mesh processing settings.");
+    auto result = MeshPtr::New();
+    result->DeepCopy(m_original);
+    VTKMeshRoutines routines;
+    if (options.reduction > 0)
+        routines.meshReduction(result, options.reduction);
+    if (options.smoothingIterations > 0)
+        routines.smoothMesh(result, options.smoothingIterations);
+    if (options.center)
+        routines.moveMeshToCOSCenter(result);
+    m_processed = result;
+    emit meshReady(m_original, m_processed);
+}
+void DicomConverter::build(double spacing, const MeshOptions &options) {
+    try {
+        m_original = d2m::surfaceFromMask(m_mask, spacing);
+        if (!m_original->GetNumberOfCells())
+            throw std::runtime_error(
+                "The mask has no surface. Adjust the thresholds or paint the target region.");
+        processMesh(options);
+    } catch (const std::exception &e) {
+        emit failed("build", QString::fromUtf8(e.what()));
+    }
+}
+void DicomConverter::process(const MeshOptions &options) {
+    try {
+        processMesh(options);
+    } catch (const std::exception &e) {
+        emit failed("process", QString::fromUtf8(e.what()));
+    }
+}
+void DicomConverter::save(const QString &path, bool original) {
+    try {
+        const auto mesh = original ? m_original : m_processed;
+        if (!mesh || !mesh->GetNumberOfCells())
+            throw std::runtime_error("There is no current surface to export.");
+        VTKMeshData writer;
+        const QString suffix = QFileInfo(path).suffix().toLower();
+        if (suffix == "stl")
+            writer.exportAsStlFile(mesh, path.toStdString(), true);
+        else if (suffix == "obj")
+            writer.exportAsObjFile(mesh, path.toStdString());
+        else if (suffix == "ply")
+            writer.exportAsPlyFile(mesh, path.toStdString());
         else
-        {
-            ret = true;
-        }
+            throw std::runtime_error("Choose an STL, OBJ or PLY filename.");
+        if (!std::filesystem::exists(path.toStdString()) ||
+            !std::filesystem::file_size(path.toStdString()))
+            throw std::runtime_error(
+                "The model could not be written. Check the destination and available disk space.");
+        emit saved(path);
+    } catch (const std::exception &e) {
+        emit failed("save", QString::fromUtf8(e.what()));
     }
-
-    emit loadDicomImage_Done(ret);
-}
-
-void DicomConverter::centerMesh()
-{
-    m_vmr->moveMeshToCOSCenter( m_mesh );
-    emit centerMesh_Done(true);
-}
-
-void DicomConverter::reduction(double reductionRate)
-{
-    bool ret = true;
-
-    if( reductionRate > 0.0 && reductionRate < 1.0 )
-    {
-        m_vmr->meshReduction(m_mesh, reductionRate);
-        ret = true;
-    }
-    else
-    {
-        std::cerr << "Invalid reduction rate: " << reductionRate << endl;
-        ret = false;
-    }
-
-    emit reduction_Done(ret);
-}
-
-void DicomConverter::filtering(double filterRate )
-{
-    bool ret = true;
-
-    if( filterRate > 0.0 && filterRate < 1.0 )
-    {
-        m_vmr->removeSmallObjects(m_mesh, filterRate);
-        ret = true;
-    }
-    else
-    {
-        std::cerr << "Invalid filter rate: " << filterRate << endl;
-        ret = false;
-    }
-
-    emit filtering_Done(ret);
-}
-
-void DicomConverter::smoothing()
-{
-    bool ret = true;
-
-    m_vmr->smoothMesh(m_mesh, 20);
-
-    emit smoothing_Done(ret);
-}
-
-void DicomConverter::exportMesh(const QString &meshPath)
-{
-    bool ret = true;
-
-    std::string path = meshPath.toStdString();
-    std::string::size_type idx = path.rfind('.');
-    if( idx != std::string::npos )
-    {
-        std::string extension = path.substr(idx+1);
-
-        if( extension == "obj" )
-        {
-            m_vmd->exportAsObjFile(m_mesh, path);
-        }
-        else if( extension == "stl" )
-        {
-            m_vmd->exportAsStlFile( m_mesh, path );
-        }
-        else if( extension == "ply" )
-        {
-            m_vmd->exportAsPlyFile( m_mesh, path );
-        }
-        else
-        {
-            std::cerr << "Unknown file type" << endl;
-            ret = false;
-        }
-    }
-    else
-    {
-        std::cerr << "No Filename." << endl;
-        ret = false;
-    }
-
-    emit export_Done(ret);
-}
-
-vtkSmartPointer<vtkPolyData> DicomConverter::getMesh()
-{
-    return m_mesh;
 }

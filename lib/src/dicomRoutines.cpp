@@ -22,11 +22,10 @@
 *****************************************************************************/
 
 #include "dicomRoutines.h"
+#include "dicomSeries.h"
+#include "volumeSegmentation.h"
 
-#include <vtkDICOMImageReader.h>
-#include <vtkMarchingCubes.h>
 #include <vtkExtractVOI.h>
-#include <vtkImageThreshold.h>
 #include <vtkPNGReader.h>
 #include <vtkStringArray.h>
 #include <iostream>
@@ -51,66 +50,27 @@ void VTKDicomRoutines::SetProgressCallback( vtkSmartPointer<vtkCallbackCommand> 
 
 vtkSmartPointer<vtkImageData> VTKDicomRoutines::loadDicomImage( const std::string& pathToDicom )
 {
-    cout << "Read DICOM images located under " << pathToDicom << endl;
-
-    vtkSmartPointer<vtkDICOMImageReader> reader = vtkSmartPointer<vtkDICOMImageReader>::New();
-    reader->SetDirectoryName( pathToDicom.c_str() );
-    if( m_progressCallback.Get() != NULL )
-    {
-        reader->AddObserver(vtkCommand::ProgressEvent, m_progressCallback);
+    m_error.clear();
+    try {
+        const auto catalog = d2m::scanDicomDirectory(pathToDicom);
+        const d2m::DicomSeries* selected = nullptr;
+        for (const auto& series : catalog.series) if (series.usable()) {
+            if (selected) throw std::runtime_error("Multiple anatomical series found. Select a series in the GUI or use --list-series and --series UID.");
+            selected = &series;
+        }
+        if (!selected) throw std::runtime_error("No valid 3D series found. " + catalog.series.front().error);
+        return d2m::loadDicomSeries(*selected);
+    } catch (const std::exception& error) {
+        m_error = error.what();
+        std::cerr << m_error << std::endl;
+        return nullptr;
     }
-    reader->Update();
-
-    vtkSmartPointer<vtkImageData> rawVolumeData = vtkSmartPointer<vtkImageData>::New();
-    rawVolumeData->DeepCopy(reader->GetOutput());
-
-    // check if load was successful
-    if( !checkDataLoaded(rawVolumeData) )
-    {
-        cerr << "No DICOM data in directory" << endl;
-        return NULL;
-    }
-
-    cout << endl << endl;
-
-    return rawVolumeData;
 }
 
 vtkSmartPointer<vtkPolyData> VTKDicomRoutines::dicomToMesh(vtkSmartPointer<vtkImageData> imageData, int threshold,
                                                            bool useUpperThreshold = false, int upperThreshold = 0)
 {
-    if(useUpperThreshold)
-    {
-        cout << "Create surface mesh with iso value range = " << threshold << " to " << upperThreshold << endl;
-
-        vtkSmartPointer<vtkImageThreshold> imageThreshold = vtkSmartPointer<vtkImageThreshold>::New();
-        imageThreshold->SetInputData(imageData);
-        imageThreshold->ThresholdByUpper(upperThreshold);
-        imageThreshold->ReplaceInOn();
-        imageThreshold->SetInValue(threshold - 1); // mask voxels with a value lower than the lower threshold
-        imageThreshold->Update();
-        imageData->DeepCopy(imageThreshold->GetOutput());
-    }
-    else
-    {
-        cout << "Create surface mesh with iso value = " << threshold << endl;
-    }
-
-    vtkSmartPointer<vtkMarchingCubes> surfaceExtractor = vtkSmartPointer<vtkMarchingCubes>::New();
-    surfaceExtractor->ComputeNormalsOn();
-    surfaceExtractor->SetValue( 0,threshold ) ;
-    surfaceExtractor->SetInputData( imageData );
-    if( m_progressCallback.Get() != NULL )
-    {
-        surfaceExtractor->AddObserver(vtkCommand::ProgressEvent, m_progressCallback);
-    }
-    surfaceExtractor->Update();
-
-    vtkSmartPointer<vtkPolyData> mesh = vtkSmartPointer<vtkPolyData>::New();
-    mesh->DeepCopy( surfaceExtractor->GetOutput() );
-
-    cout << endl << endl;
-    return mesh;
+    return d2m::intensitySurface(imageData, threshold, useUpperThreshold, upperThreshold);
 }
 
 void VTKDicomRoutines::cropDicom( vtkSmartPointer<vtkImageData> imageData )
@@ -192,6 +152,6 @@ vtkSmartPointer<vtkImageData> VTKDicomRoutines::loadPngImages( const std::vector
 
 bool VTKDicomRoutines::checkDataLoaded( vtkSmartPointer<vtkImageData> imageData )
 {
-    int* dims = imageData->GetDimensions();
-    return dims[0] > 0  && dims[1] > 0  &&  dims[2] > 0;
+    try { d2m::validateVolume(imageData); return true; }
+    catch (const std::exception& error) { m_error=error.what();std::cerr << m_error << std::endl;return false; }
 }
