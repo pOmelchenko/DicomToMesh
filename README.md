@@ -68,6 +68,40 @@ Your mesh will be created alongside your dicom images and named `mesh.stl`
 
 The software is written in modern C++ on top of the powerful VTK library and is using CMake as a build-system.
 
+## Building with Pixi (macOS and Linux)
+
+Install [Pixi](https://pixi.sh/latest/installation/), then run these commands from the repository root:
+
+```bash
+pixi install --locked
+pixi run build
+pixi run test
+pixi run gui
+```
+
+Pixi installs CMake, Ninja, pkg-config, a C++ compiler, VTK, Qt 5 and GoogleTest from
+conda-forge. The committed `pixi.lock` records the exact packages for Apple
+Silicon macOS, Intel macOS and x86-64 Linux (macOS 13+ or Linux with glibc
+2.28+). On macOS, Apple's Xcode Command Line Tools (or Xcode) must also be
+installed to provide the system SDK.
+
+The environment pins VTK 9.2 and Qt 5 so the GUI and VTK use the same Qt
+version. Extended `vtk-dicom` support is disabled (`USE_VTK_DICOM=OFF`).
+
+The build includes the CLI, GUI and both existing test suites. CMake finds
+GoogleTest in the Pixi environment instead of downloading it. Build files
+are kept in `build/pixi/`; binaries should be run through Pixi so their
+runtime dependencies and Qt plugins are available. `gui`, `cli` and `test`
+automatically configure and build the project before running. Tests copy
+their fixtures into the build directory and keep generated files there.
+
+```bash
+pixi run cli -h
+pixi run cli -i /path/to/dicom -t 557 -o mesh.stl
+```
+
+## Building with system dependencies
+
 Building DicomToMesh on Linux and OSX:
 ```
 > git clone https://github.com/AOT-AG/DicomToMesh.git

@@ -1,0 +1,25 @@
+[workspace]
+name = "dicom-to-mesh"
+description = "Build and run DicomToMesh with a managed C++ environment"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64"]
+
+[dependencies]
+cmake = ">=3.24,<5"
+ninja = ">=1.11,<2"
+pkg-config = ">=0.29,<1"
+cxx-compiler = ">=1.7,<2"
+# VTK 9.2 conda-forge builds use the same Qt 5 as the GUI.
+# Use the complete package: VTK's CMake exports also reference vtk-io-ffmpeg.
+vtk = "9.2.*"
+qt-main = "5.15.*"
+gtest = "1.17.*"
+# conda-forge's VTK package includes Python bindings and their runtime.
+python = "3.12.*"
+
+[tasks]
+configure = { cmd = 'cmake -S . -B build/pixi -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DPKG_CONFIG_EXECUTABLE="$CONDA_PREFIX/bin/pkg-config" -DBUILD_GUI=ON -DUSE_VTK_DICOM=OFF -DTESTDICOM2MESH=ON -DTESTDICOM2MESHLIB=ON', description = "Configure the CLI, GUI and existing tests" }
+build = { cmd = "cmake --build build/pixi --parallel", depends-on = ["configure"], description = "Build the CLI, GUI and tests" }
+cli = { cmd = "./build/pixi/dicom2mesh/dicom2mesh", depends-on = ["build"], description = "Run the CLI; append DicomToMesh arguments" }
+gui = { cmd = "./build/pixi/gui/dicom2meshgui", depends-on = ["build"], description = "Launch the Qt GUI" }
+test = { cmd = "cmake -E copy_directory ../../lib/test/data lib/test/data && ./lib/runLibTests && ./dicom2mesh/runD2MTests", cwd = "build/pixi", depends-on = ["build"], description = "Run the library and CLI test suites in the build directory" }

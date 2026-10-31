@@ -2,12 +2,6 @@
 
 project( dicom2mesh )
 
-find_package( VTK REQUIRED )
-
-IF("${VTK_MAJOR_VERSION}" LESS 9)
-    include( ${VTK_USE_FILE} )
-ENDIF("${VTK_MAJOR_VERSION}" LESS 9)
-
 include_directories( inc )
 add_executable( dicom2mesh src/main.cpp src/dicom2mesh.cpp )
 target_link_libraries( dicom2mesh dicom2meshlib ${VTK_LIBRARIES} )
@@ -20,7 +14,10 @@ option(TESTDICOM2MESH "Test Dicom2Mesh" OFF)
 IF(${TESTDICOM2MESH})
     MESSAGE(STATUS "Test dicom2mesh activated")
 
-    if(NOT TARGET gtest_main)
+    if(NOT TARGET GTest::gtest_main)
+        find_package(GTest CONFIG QUIET)
+    endif()
+    if(NOT TARGET GTest::gtest_main)
         include(FetchContent)
         FetchContent_Declare(
             googletest
@@ -35,7 +32,7 @@ IF(${TESTDICOM2MESH})
     FILE(GLOB_RECURSE  D2M_TESTS_SRC       test/*.cpp)
 
     add_executable( runD2MTests src/dicom2mesh.cpp ${D2M_TESTS_INC} ${D2M_TESTS_SRC} )
-    target_link_libraries( runD2MTests dicom2meshlib gtest_main)
+    target_link_libraries( runD2MTests dicom2meshlib GTest::gtest_main)
     target_compile_features( runD2MTests PRIVATE cxx_std_17 )
     target_compile_options( runD2MTests PRIVATE -Wall -Wno-extra-semi )
 ENDIF()

@@ -2,12 +2,6 @@
 
 project( dicom2meshlib )
 
-find_package( VTK REQUIRED )
-
-IF("${VTK_MAJOR_VERSION}" LESS 9)
-    include( ${VTK_USE_FILE} )
-ENDIF("${VTK_MAJOR_VERSION}" LESS 9)
-
 set(DICOM_TO_MESH_LIB_LIBS ${VTK_LIBRARIES})
 
 FILE(GLOB  DICOM_TO_MESH_LIB_INC       inc/*.h)
@@ -16,7 +10,6 @@ set(DICOM_TO_MESH_INC_DIRS inc)
 
 # This library can be downloaded at https://github.com/dgobbi/vtk-dicom and
 # enables the user to load more types of DICOM images.
-option(USE_VTK_DICOM "Use VTK-DICOM Lib (extended DICOM support)" OFF)
 IF("${VTK_MAJOR_VERSION}" LESS 9)
     if( USE_VTK_DICOM )
         message(STATUS "The external library vtk-dicom, written by David Gobbi, is activated. The project is located under https://github.com/dgobbi/vtk-dicom and relaeased under BSD 3.")
@@ -43,6 +36,9 @@ include_directories( ${DICOM_TO_MESH_INC_DIRS} )
 
 ADD_LIBRARY(dicom2meshlib STATIC ${DICOM_TO_MESH_LIB_INC} ${DICOM_TO_MESH_LIB_SRC})
 target_link_libraries(dicom2meshlib ${DICOM_TO_MESH_LIB_LIBS})
+if(COMMAND vtk_module_autoinit)
+    vtk_module_autoinit(TARGETS dicom2meshlib MODULES ${VTK_LIBRARIES})
+endif()
 target_include_directories(dicom2meshlib INTERFACE ${DICOM_TO_MESH_INC_DIRS})
 target_compile_features(dicom2meshlib PRIVATE cxx_std_17)
 target_compile_options( dicom2meshlib PRIVATE -Wall -Wno-extra-semi )
@@ -62,7 +58,10 @@ option(TESTDICOM2MESHLIB "Test library" OFF)
 IF(${TESTDICOM2MESHLIB})
     MESSAGE(STATUS "Test library activated")
 
-    if(NOT TARGET gtest_main)
+    if(NOT TARGET GTest::gtest_main)
+        find_package(GTest CONFIG QUIET)
+    endif()
+    if(NOT TARGET GTest::gtest_main)
         include(FetchContent)
         FetchContent_Declare(
             googletest
@@ -77,7 +76,7 @@ IF(${TESTDICOM2MESHLIB})
     FILE(GLOB_RECURSE  D2M_LIB_TESTS_SRC       test/*.cpp)
 
     add_executable(runLibTests ${D2M_LIB_TESTS_INC} ${D2M_LIB_TESTS_SRC})
-    target_link_libraries(runLibTests dicom2meshlib gtest_main)
+    target_link_libraries(runLibTests dicom2meshlib GTest::gtest_main)
     target_compile_features( runLibTests PRIVATE cxx_std_17 )
     target_compile_options( runLibTests PRIVATE -Wall -Wno-extra-semi )
 ENDIF()

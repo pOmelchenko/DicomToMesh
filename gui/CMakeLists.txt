@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0 )
+cmake_minimum_required(VERSION 3.24 )
 
 project(dicom2meshgui)
 
@@ -7,11 +7,6 @@ SET(CMAKE_AUTOMOC ON)
 SET(CMAKE_AUTORCC ON)
 
 find_package(Qt5Widgets REQUIRED)
-find_package(VTK REQUIRED)
-
-IF("${VTK_MAJOR_VERSION}" LESS 9)
-    include( ${VTK_USE_FILE} )
-ENDIF("${VTK_MAJOR_VERSION}" LESS 9)
 
 SET( APP_SOURCES main.cpp d2mWidget.cpp dicomConverter.cpp rsc/dicom2meshgui.qrc)
 SET( APP_UIS d2mWidget.ui )

@@ -2,6 +2,26 @@
 
 project( d2m )
 
+option(USE_VTK_DICOM "Use VTK-DICOM Lib (extended DICOM support)" OFF)
+
+# Request only the modules used by DicomToMesh. Loading every VTK module
+# also requires unrelated SDKs (Python, Boost, databases, etc.). Keep the
+# original discovery path for legacy VTK and optional vtk-dicom builds.
+if(NOT USE_VTK_DICOM)
+    find_package(VTK 9 QUIET COMPONENTS
+        CommonCore CommonDataModel CommonExecutionModel CommonMath CommonTransforms
+        FiltersCore FiltersGeneral FiltersSources ImagingCore
+        IOGeometry IOImage IOPLY InteractionStyle
+        RenderingCore RenderingOpenGL2 RenderingVolume RenderingVolumeOpenGL2
+    )
+endif()
+if(USE_VTK_DICOM OR NOT VTK_FOUND)
+    find_package(VTK REQUIRED)
+endif()
+if(VTK_MAJOR_VERSION LESS 9)
+    include(${VTK_USE_FILE})
+endif()
+
 option(GCOV "COVERAGE" OFF)
 IF(GCOV)
     message(STATUS "COVERAGE ON")
